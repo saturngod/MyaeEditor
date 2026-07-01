@@ -4,6 +4,8 @@ A native macOS block editor built with SwiftUI. Write in
 rich blocks — headings, lists, to-dos, tables, code, math — and save straight to
 Markdown.
 
+![](./screenshot.png)
+
 ## Features
 
 - **Block-based editing** — paragraphs, H1–H3, bulleted / numbered / to-do lists,
@@ -143,6 +145,12 @@ and drops text focus. A global key monitor in `EditorView` then routes
 Copy/Cut/Delete/Escape to whole-block operations — copy serializes the selected
 blocks back to Markdown via `MarkdownCodec`.
 
+Selection can also start as a normal text drag and escalate: a `BlockTextView`
+drag that crosses its own block's edge switches from character selection to
+whole-block selection (via a custom `NSTextView` event-tracking loop), and
+dragging back de-escalates while keeping the original anchor — a Notion-style
+cross-block select.
+
 ### Popups
 
 Two SwiftUI `.popover`s hang off each block row (`BlockRowView`), so they float
@@ -183,14 +191,22 @@ actually changed.
 
 ## Keyboard Shortcuts
 
-| Action              | Shortcut |
-| ------------------- | -------- |
-| Open                | `⌘O`     |
-| Save                | `⌘S`     |
-| Save As Markdown    | `⇧⌘S`    |
-| Insert block        | `/`      |
+| Action                         | Shortcut |
+| ------------------------------- | -------- |
+| Open                           | `⌘O`     |
+| Save                           | `⌘S`     |
+| Save As Markdown               | `⇧⌘S`    |
+| Insert block                   | `/`      |
+| Bold (text selected)           | `⌘B`     |
+| Italic (text selected)         | `⌘I`     |
+| Inline code (text selected)    | `⌘E`     |
+| Strikethrough (text selected)  | `⇧⌘S`    |
 
 ## Tests
 
 - `MyaeEditorTests/` — unit tests
 - `MyaeEditorUITests/` — UI tests
+
+## License
+
+MIT — see [LICENSE](LICENSE).

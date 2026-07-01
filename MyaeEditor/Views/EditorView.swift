@@ -18,6 +18,13 @@ extension Notification.Name {
     static let saveMarkdown = Notification.Name("saveMarkdown")
     static let saveAsMarkdown = Notification.Name("saveAsMarkdown")
     static let openMarkdown = Notification.Name("openMarkdown")
+    static let newDocument = Notification.Name("newDocument")
+}
+
+/// One-shot hand-off used when Open is invoked with no window: the App stages the
+/// chosen file here, opens a window, and the new `EditorView.init` consumes it.
+enum LaunchIntent {
+    static var pendingOpenURL: URL?
 }
 
 /// Collects each row's frame (in the editor coordinate space) so the drag
@@ -59,15 +66,35 @@ struct EditorView: View {
     /// running a cross-block text-selection drag.
     private var framesActive: Bool { draggingID != nil || marqueeStart != nil || crossDragging }
 
+    /// True once the autosaved document has been restored into the first window
+    /// of this launch. Later windows open blank instead of re-showing it.
+    private static var didRestore = false
+
     init() {
-        if let markdown = DocumentStore.load() {
+        if let url = LaunchIntent.pendingOpenURL {
+            // Open was invoked with no window — load the chosen file into this
+            // freshly created window.
+            LaunchIntent.pendingOpenURL = nil
+            EditorView.didRestore = true
+            DocumentStore.currentFileURL = url
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            _document = State(initialValue: EditorDocument(blocks: MarkdownCodec.decode(text)))
+            _lastSaved = State(initialValue: text)
+            _fileURL = State(initialValue: url)
+            _docTitle = State(initialValue: url.deletingPathExtension().lastPathComponent)
+        } else if !EditorView.didRestore, let markdown = DocumentStore.load() {
+            // First window of the launch restores the autosaved document.
+            EditorView.didRestore = true
             _document = State(initialValue: EditorDocument(blocks: MarkdownCodec.decode(markdown)))
             _lastSaved = State(initialValue: markdown)
+            _docTitle = State(initialValue: DocumentStore.loadTitle())
         } else {
-            _document = State(initialValue: EditorDocument(blocks: EditorView.sample))
+            // A new window starts as a blank page.
+            EditorView.didRestore = true
+            _document = State(initialValue: EditorDocument(blocks: EditorView.blankBlocks()))
             _lastSaved = State(initialValue: "")
+            _docTitle = State(initialValue: "")
         }
-        _docTitle = State(initialValue: DocumentStore.loadTitle())
     }
 
     var body: some View {
@@ -123,7 +150,7 @@ struct EditorView: View {
             .onPreferenceChange(RowFramePreference.self) { rowFrames = $0 }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear { installKeyMonitor() }
+        .onAppear { installKeyMonitor(); updateWindowTitle() }
         .onDisappear { removeKeyMonitor(); formatBar.hide() }
         .onReceive(document.autosaveSignal) { _ in saveIfChanged() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
@@ -135,8 +162,11 @@ struct EditorView: View {
         .onReceive(NotificationCenter.default.publisher(for: .saveAsMarkdown)) { _ in
             runSaveAsPanel()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openMarkdown)) { _ in
-            runOpenPanel()
+        .onReceive(NotificationCenter.default.publisher(for: .openMarkdown)) { note in
+            if let url = note.object as? URL { loadFile(url) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .newDocument)) { _ in
+            newBlankDocument()
         }
     }
 
@@ -148,22 +178,28 @@ struct EditorView: View {
         lastSaved = markdown
     }
 
-    /// Open an .md file. Its folder becomes the base for relative image paths.
-    private func runOpenPanel() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.markdown]   // Markdown editor — .md only
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        // runModal (not the async .begin) — a modeless open panel launched from a
-        // menu command often opens behind the window and never becomes key.
-        guard panel.runModal() == .OK, let url = panel.url,
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+    /// Load an .md file into this window. Its folder becomes the base for relative
+    /// image paths. The App presents the Open panel and hands us the URL.
+    private func loadFile(_ url: URL) {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
         DocumentStore.currentFileURL = url      // set before decode so images resolve
         fileURL = url
         document.blocks = MarkdownCodec.decode(text)
         document.clearSelection()
         document.focusedBlockID = document.blocks.first?.id
         lastSaved = text
+        updateWindowTitle()
+    }
+
+    /// Reset this window to an empty document (File ▸ New into an existing window).
+    private func newBlankDocument() {
+        DocumentStore.currentFileURL = nil
+        fileURL = nil
+        document.blocks = EditorView.blankBlocks()
+        document.clearSelection()
+        document.focusedBlockID = document.blocks.first?.id
+        lastSaved = ""
+        updateWindowTitle()
     }
 
     /// Present a Save panel and write Markdown.
@@ -180,6 +216,16 @@ struct EditorView: View {
         DocumentStore.currentFileURL = url      // subsequent autosaves go here
         fileURL = url
         lastSaved = markdown
+        updateWindowTitle()
+    }
+
+    /// Reflect the open file's name in the window's title bar (and proxy icon).
+    private func updateWindowTitle() {
+        let window = NSApp.mainWindow
+            ?? NSApp.windows.first { $0.isVisible && !($0 is NSPanel) }
+        guard let window else { return }
+        window.representedURL = fileURL
+        window.title = fileURL?.lastPathComponent ?? "MyaeEditor"
     }
 
     /// Serialize and write to disk only when the Markdown actually changed.
@@ -313,34 +359,12 @@ struct EditorView: View {
             .onChange(of: titleFocused) { _, focused in if focused { document.clearSelection() } }
     }
 
-    static var sample: [Block] {
-        func p(_ s: String, _ kind: BlockKind = .paragraph, _ depth: Int = 0) -> Block {
-            Block(kind: kind, text: NSAttributedString(
-                string: s,
-                attributes: BlockTextView.typingAttributes(for: kind)), depth: depth)
-        }
-        return [
-            p("Welcome to your editor", .heading1),
-            p("A native SwiftUI, block-based, WYSIWYG editor.", .paragraph),
-            p("Things you can do", .heading2),
-            p("Type / on an empty line to insert any block", .bulleted),
-            p("Use # , ## , - , [] , > as you type to transform a line", .bulleted),
-            p("Press Tab to indent, Shift+Tab to outdent", .bulleted),
-            p("Nesting works at any depth", .bulleted, 1),
-            p("Like this", .bulleted, 2),
-            p("Press Enter for a new block, Backspace to merge or delete", .bulleted),
-            p("Hover a block and drag the handle to reorder", .bulleted),
-            p("Select text and press ⌘B / ⌘I for bold / italic", .bulleted),
-            p("Try me", .todo),
-            p("\"Simplicity is the ultimate sophistication.\"", .quote),
-            p("// Pick a language from the menu above\nfunc greet(_ name: String) -> String {\n    return \"Hello, \\(name)!\"  // string interpolation\n}", .code),
-            Block(kind: .table, table: TableData(cells: [
-                ["Feature", "Status"],
-                ["Tables", "Done"],
-                ["Sync", "Planned"],
-            ])),
-            p(""),
-        ]
+    /// A fresh, empty document: a single blank paragraph the caret can land in.
+    static func blankBlocks() -> [Block] {
+        [Block(kind: .paragraph,
+               text: NSAttributedString(
+                string: "",
+                attributes: BlockTextView.typingAttributes(for: .paragraph)))]
     }
 }
 
