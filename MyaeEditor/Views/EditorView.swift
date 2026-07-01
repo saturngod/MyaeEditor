@@ -151,35 +151,35 @@ struct EditorView: View {
     /// Open an .md file. Its folder becomes the base for relative image paths.
     private func runOpenPanel() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.markdown, .plainText]
+        panel.allowedContentTypes = [.markdown]   // Markdown editor — .md only
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.begin { response in
-            guard response == .OK, let url = panel.url,
-                  let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-            DocumentStore.currentFileURL = url      // set before decode so images resolve
-            fileURL = url
-            document.blocks = MarkdownCodec.decode(text)
-            document.clearSelection()
-            document.focusedBlockID = document.blocks.first?.id
-            lastSaved = text
-        }
+        // runModal (not the async .begin) — a modeless open panel launched from a
+        // menu command often opens behind the window and never becomes key.
+        guard panel.runModal() == .OK, let url = panel.url,
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        DocumentStore.currentFileURL = url      // set before decode so images resolve
+        fileURL = url
+        document.blocks = MarkdownCodec.decode(text)
+        document.clearSelection()
+        document.focusedBlockID = document.blocks.first?.id
+        lastSaved = text
     }
 
-    /// Present a Save panel (async, so it reliably appears) and write Markdown.
+    /// Present a Save panel and write Markdown.
     private func runSaveAsPanel() {
         let markdown = MarkdownCodec.encode(document)
         let panel = NSSavePanel()
         panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "document.md"
         panel.allowedContentTypes = [.markdown]
         panel.canCreateDirectories = true
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            try? markdown.write(to: url, atomically: true, encoding: .utf8)
-            DocumentStore.currentFileURL = url      // subsequent autosaves go here
-            fileURL = url
-            lastSaved = markdown
-        }
+        // runModal (not the async .begin) so the panel reliably comes to front when
+        // launched from the Save As menu command.
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+        DocumentStore.currentFileURL = url      // subsequent autosaves go here
+        fileURL = url
+        lastSaved = markdown
     }
 
     /// Serialize and write to disk only when the Markdown actually changed.
