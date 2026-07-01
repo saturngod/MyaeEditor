@@ -44,6 +44,10 @@ struct EditorView: View {
     @State private var marqueeStart: CGFloat?
     @State private var keyMonitor: Any?
 
+    // Cross-block text-selection drag (escalates to whole-block selection).
+    @State private var crossDragging = false
+    @State private var crossAnchorID: UUID?
+
     // Floating format toolbar shown on text selection.
     @State private var formatBar = FormatBarController()
 
@@ -51,8 +55,9 @@ struct EditorView: View {
 
     private let space = "editor"
 
-    /// Row frames are only needed while dragging to reorder or marquee-selecting.
-    private var framesActive: Bool { draggingID != nil || marqueeStart != nil }
+    /// Row frames are only needed while dragging to reorder, marquee-selecting, or
+    /// running a cross-block text-selection drag.
+    private var framesActive: Bool { draggingID != nil || marqueeStart != nil || crossDragging }
 
     init() {
         if let markdown = DocumentStore.load() {
@@ -77,7 +82,10 @@ struct EditorView: View {
                                  draggingID: $draggingID,
                                  formatBar: formatBar,
                                  onDragChanged: { y in reorder(toY: y) },
-                                 onDragEnded: { draggingID = nil })
+                                 onDragEnded: { draggingID = nil },
+                                 onSelectionDragBegan: { crossDragging = true; crossAnchorID = block.id },
+                                 onSelectionDragChanged: { localY, h in crossDrag(localY: localY, textHeight: h) },
+                                 onSelectionDragEnded: { crossDragging = false; crossAnchorID = nil })
                         // Measure row frames only during an active drag/marquee.
                         // When idle there's no GeometryReader, so scrolling a large
                         // document doesn't churn the rowFrames preference every pass.
@@ -213,6 +221,17 @@ struct EditorView: View {
         withAnimation(.easeInOut(duration: 0.18)) {
             document.move(id: draggingID, toIndexAmongOthers: index)
         }
+    }
+
+    /// Drive whole-block selection from an escalated cross-block text drag. `localY`
+    /// is the pointer's Y in the anchor text view's coords; we translate it to
+    /// editor space off the edge it exited so row padding introduces no error, then
+    /// select every block between the anchor's mid and the pointer.
+    private func crossDrag(localY: CGFloat, textHeight: CGFloat) {
+        guard let anchorID = crossAnchorID, let f = rowFrames[anchorID] else { return }
+        let pointerY = localY < 0 ? f.minY + localY : f.maxY + (localY - textHeight)
+        document.selectBlocks(intersecting: f.midY, pointerY, frames: rowFrames)
+        formatBar.hide()
     }
 
     // MARK: Marquee drag-to-select

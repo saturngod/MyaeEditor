@@ -22,6 +22,12 @@ struct BlockRowView: View {
     /// Called continuously during a handle drag with the pointer Y in editor space.
     var onDragChanged: (CGFloat) -> Void
     var onDragEnded: () -> Void
+    /// Text-selection drag began inside this block (arms row-frame collection).
+    var onSelectionDragBegan: () -> Void = {}
+    /// Selection drag escalated to whole-block selection: (localY, textHeight).
+    var onSelectionDragChanged: (CGFloat, CGFloat) -> Void = { _, _ in }
+    /// Selection drag ended.
+    var onSelectionDragEnded: () -> Void = {}
 
     @State private var hovering = false
     @State private var showBlockMenu = false
@@ -298,7 +304,10 @@ struct BlockRowView: View {
                 mathEditRange = range
                 mathLatex = latex
                 mathEditing = true
-            }
+            },
+            onSelectionDragBegan: onSelectionDragBegan,
+            onSelectionDragChanged: onSelectionDragChanged,
+            onSelectionDragEnded: onSelectionDragEnded
         )
         .strikethrough(block.kind == .todo && block.checked)
         .opacity(block.kind == .todo && block.checked ? 0.55 : 1)

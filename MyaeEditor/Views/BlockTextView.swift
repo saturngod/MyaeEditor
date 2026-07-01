@@ -58,6 +58,15 @@ struct BlockTextView: NSViewRepresentable {
     var onFocusApplied: () -> Void
     /// Double-click landed on an inline math attachment: (its range, its LaTeX).
     var onEditMath: (NSRange, String) -> Void = { _, _ in }
+    /// A text-selection drag began inside this block (first drag event). Lets
+    /// EditorView arm row-frame collection before the pointer crosses a boundary.
+    var onSelectionDragBegan: () -> Void = {}
+    /// The selection drag escalated to whole-block selection and the pointer moved.
+    /// `localY` is the pointer's Y in the text view's (flipped) coords — negative
+    /// above the top, greater than `textHeight` below the bottom.
+    var onSelectionDragChanged: (_ localY: CGFloat, _ textHeight: CGFloat) -> Void = { _, _ in }
+    /// The selection drag ended (mouse up), whether or not it escalated.
+    var onSelectionDragEnded: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -221,9 +230,10 @@ struct BlockTextView: NSViewRepresentable {
             } else {
                 applyInlineCodeIfClosed(tv)   // `code` typed → style it
             }
-            // attributedString() already returns an immutable snapshot copy of the
-            // storage; no need to wrap it in another NSAttributedString copy.
-            parent.text = tv.attributedString()
+            // MUST be a copy: attributedString() returns the live text storage, and
+            // sharing that mutable object with the binding makes onChange(of:) see
+            // "no change" on every keystroke (breaking markdown shortcuts + autosave).
+            parent.text = NSAttributedString(attributedString: tv.attributedString())
             tv.invalidateIntrinsicContentSize()
 
             // Slash command: opens when a "/" was just typed at the caret — works
@@ -419,7 +429,10 @@ final class AutoSizingTextView: NSTextView {
         return abs(caretRect.minY - lastRect.minY) < 1
     }
 
-    // Double-click on an inline math attachment opens its editor.
+    // Double-click on an inline math attachment opens its editor. Otherwise a plain
+    // selection drag runs our own tracking loop so it can escalate to whole-block
+    // selection when the pointer leaves this block (SwiftUI/monitors never see the
+    // native NSTextView modal loop). Modified clicks fall back to the native path.
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 2,
            let lm = layoutManager, let tc = textContainer, let storage = textStorage {
@@ -432,7 +445,97 @@ final class AutoSizingTextView: NSTextView {
                 return
             }
         }
-        super.mouseDown(with: event)
+
+        // Shift-extend / discontiguous / context-menu clicks keep native behavior.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard let window, isSelectable,
+              mods.isDisjoint(with: [.shift, .command, .control]) else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        window.makeFirstResponder(self)   // focuses -> onFocused clears any block selection
+
+        // Anchor selection: character / word / paragraph by click count.
+        let granularity: NSSelectionGranularity =
+            event.clickCount >= 3 ? .selectByParagraph
+          : event.clickCount == 2 ? .selectByWord
+          : .selectByCharacter
+        let p0 = convert(event.locationInWindow, from: nil)
+        let anchorIdx = characterIndexForInsertion(at: p0)
+        let anchorRange = selectionRange(
+            forProposedRange: NSRange(location: anchorIdx, length: 0), granularity: granularity)
+        setSelectedRange(anchorRange)
+
+        var escalated = false
+        var dragStarted = false
+        let slop: CGFloat = 8
+
+        trackingLoop: while true {
+            guard let e = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                           until: .distantFuture,
+                                           inMode: .eventTracking, dequeue: true) else { break }
+            switch e.type {
+            case .leftMouseUp:
+                break trackingLoop
+            case .keyDown:
+                // Escape cancels the whole drag; other keys are swallowed while dragging.
+                if e.keyCode == 53 {
+                    if dragStarted { coordinator?.parent.onSelectionDragEnded() }   // disarm frames
+                    setSelectedRange(NSRange(location: anchorRange.location, length: 0))
+                    coordinator?.parent.onFocused()   // clears block selection, refocuses caret
+                    // Drain to the mouse up so we don't leave the button "down".
+                    while let up = window.nextEvent(matching: [.leftMouseUp],
+                                                    until: .distantFuture,
+                                                    inMode: .eventTracking, dequeue: true),
+                          up.type != .leftMouseUp {}
+                    return
+                }
+                continue
+            default:
+                break
+            }
+
+            if !dragStarted {
+                dragStarted = true
+                coordinator?.parent.onSelectionDragBegan()
+            }
+
+            let p = convert(e.locationInWindow, from: nil)   // flipped: y grows downward from top
+            let inside = p.y >= -slop && p.y <= bounds.height + slop
+
+            if inside {
+                if escalated {
+                    escalated = false
+                    window.makeFirstResponder(self)   // onFocused clears selectedBlockIDs
+                }
+                autoscroll(with: e)
+                let idx = characterIndexForInsertion(at: p)
+                let lo = min(anchorRange.location, idx)
+                let hi = max(anchorRange.location + anchorRange.length, idx)
+                let sel = selectionRange(forProposedRange: NSRange(location: lo, length: hi - lo),
+                                         granularity: granularity)
+                setSelectedRange(sel,
+                                 affinity: idx < anchorRange.location ? .upstream : .downstream,
+                                 stillSelecting: true)
+            } else {
+                if !escalated {
+                    escalated = true
+                    setSelectedRange(NSRange(location: anchorRange.location, length: 0),
+                                     affinity: .downstream, stillSelecting: true)
+                    window.makeFirstResponder(nil)   // drop caret so block tint shows alone
+                }
+                coordinator?.parent.onSelectionDragChanged(p.y, bounds.height)
+            }
+        }
+
+        if escalated {
+            coordinator?.parent.onSelectionDragEnded()
+        } else {
+            if dragStarted { coordinator?.parent.onSelectionDragEnded() }
+            // Finalize the selection so textViewDidChangeSelection fires (format bar).
+            setSelectedRange(selectedRange(), affinity: .downstream, stillSelecting: false)
+        }
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -466,14 +569,17 @@ final class AutoSizingTextView: NSTextView {
     // MARK: Inline formatting (bold / italic / strikethrough over the selection)
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           selectedRange().length > 0,
-           let chars = event.charactersIgnoringModifiers {
-            switch chars {
-            case "b": toggleFontTrait(.boldFontMask); coordinator?.parent.formatBar.refreshTraits(for: self); return true
-            case "i": toggleFontTrait(.italicFontMask); coordinator?.parent.formatBar.refreshTraits(for: self); return true
-            case "e": toggleInlineCode(); coordinator?.parent.formatBar.refreshTraits(for: self); return true
-            default: break
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if selectedRange().length > 0, let chars = event.charactersIgnoringModifiers?.lowercased() {
+            if mods == .command {
+                switch chars {
+                case "b": toggleFontTrait(.boldFontMask); coordinator?.parent.formatBar.refreshTraits(for: self); return true
+                case "i": toggleFontTrait(.italicFontMask); coordinator?.parent.formatBar.refreshTraits(for: self); return true
+                case "e": toggleInlineCode(); coordinator?.parent.formatBar.refreshTraits(for: self); return true
+                default: break
+                }
+            } else if mods == [.command, .shift], chars == "s" {
+                toggleStrikethrough(); coordinator?.parent.formatBar.refreshTraits(for: self); return true
             }
         }
         return super.performKeyEquivalent(with: event)
