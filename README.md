@@ -1,30 +1,32 @@
 # MyaeEditor
 
-A native macOS block editor built with SwiftUI. Write in
-rich blocks — headings, lists, to-dos, tables, code, math — and save straight to
+A native macOS block editor made with SwiftUI. You write in
+blocks — headings, lists, to-dos, tables, code, math — and save the file as
 Markdown.
 
 ![](./screenshot.png)
 
 ## Features
 
-- **Block-based editing** — paragraphs, H1–H3, bulleted / numbered / to-do lists,
-  quotes, dividers.
-- **Slash menu** — type `/` to insert any block type.
-- **Floating format bar** — select text for bold, italic, strikethrough, and
-  inline code.
+- **Block-based editing** — paragraphs, H1–H3 headings, bullet / numbered /
+  to-do lists, quotes, dividers.
+- **Slash menu** — type `/` to add any block type.
+- **Floating format bar** — select text to make it bold, italic, strikethrough,
+  or inline code.
 - **Code blocks** — syntax highlighting for Swift, Python, JavaScript,
   TypeScript, JSON, HTML, CSS, Shell, Go, Rust, C, C++, Java, Ruby, SQL, YAML.
-- **Tables** — add/remove rows and columns with a per-cell context menu.
-- **Math** — inline math and block equations (LaTeX-style rendering).
-- **Images** — inline image blocks.
-- **Drag to reorder** — grab a block and move it; marquee-select across blocks.
-- **Markdown I/O** — Open (`⌘O`), Save (`⌘S`), Save As Markdown (`⇧⌘S`).
+- **Tables** — add or remove rows and columns with a right-click menu on each
+  cell.
+- **Math** — inline math and math blocks (rendered like LaTeX).
+- **Images** — add images as blocks.
+- **Drag to reorder** — grab a block and move it; select many blocks at once
+  by dragging over them.
+- **Markdown files** — Open (`⌘O`), Save (`⌘S`), Save As Markdown (`⇧⌘S`).
 
 ## Requirements
 
-- macOS 26.5+
-- Xcode 16+ (uses synchronized project folders)
+- macOS 26.5 or newer
+- Xcode 16 or newer (uses synchronized project folders)
 - Swift 5
 
 ## Getting Started
@@ -33,7 +35,8 @@ Markdown.
 open MyaeEditor.xcodeproj
 ```
 
-Then build and run (`⌘R`) with the **MyaeEditor** scheme. Or from the CLI:
+Then build and run (`⌘R`) using the **MyaeEditor** scheme. Or run it from the
+terminal:
 
 ```bash
 xcodebuild -project MyaeEditor.xcodeproj -scheme MyaeEditor \
@@ -42,9 +45,10 @@ xcodebuild -project MyaeEditor.xcodeproj -scheme MyaeEditor \
 
 ## Architecture
 
-SwiftUI **MV (Model-View)** — no ViewModels. `@Observable` model classes are the
-single source of truth and views bind to them directly via `@State`. Stateless
-logic (Markdown encode/decode, syntax highlighting) lives in `Services/`.
+This app uses SwiftUI **MV (Model-View)** style — there are no ViewModels.
+`@Observable` model classes hold all the data, and views read that data
+directly through `@State`. Simple logic that doesn't need state (like
+converting Markdown, or coloring code) lives in `Services/`.
 
 ```
 MyaeEditor/
@@ -62,132 +66,150 @@ MyaeEditor/
 
 ### Why MV, not MVVM
 
-`Block`, `TableData`, and `EditorDocument` are `@Observable` classes held
-directly by views (`@State private var document: EditorDocument`). Mutating a
-model updates the UI automatically — no `ObservableObject`, no `@Published`, no
-ViewModel indirection. This keeps the layers thin (KISS): models hold state,
-views mutate them, services stay stateless.
+`Block`, `TableData`, and `EditorDocument` are `@Observable` classes. Views
+hold them directly (`@State private var document: EditorDocument`). When you
+change a model, the screen updates by itself — there is no `ObservableObject`,
+no `@Published`, and no extra ViewModel layer in between. This keeps things
+simple: models hold the data, views change it, services just do plain
+calculations.
 
 ## How the Editor Works
 
-The whole document is just an **ordered array of `Block` objects** on
-`EditorDocument`. `EditorView` renders that array and mutates it — there is no
-tree, no separate model per view. Everything below flows from those two types.
+The whole document is just an **ordered list of `Block` objects**, stored on
+`EditorDocument`. `EditorView` shows that list and changes it — there is no
+tree structure, just this one list. Everything below is built on top of these
+two types.
 
 ### The `Block` object
 
-A `Block` (`Models/Models.swift`) is one editable line/element. It is an
-`@Observable` class, so editing any field re-renders just the views that read it:
+A `Block` (in `Models/Models.swift`) is one line or element you can edit. It
+is an `@Observable` class, so changing one field only redraws the parts of the
+screen that show that field:
 
 | Field       | Meaning                                             |
 | ----------- | --------------------------------------------------- |
-| `id`        | Stable `UUID` — used for `ForEach`, drag, selection |
-| `kind`      | `BlockKind` (paragraph, heading, list, code, …)     |
-| `text`      | `NSAttributedString` — the rich text (bold/italic)  |
-| `checked`   | To-do checkbox state                                |
-| `depth`     | Indentation level (0 = top-level nesting)           |
-| `language`  | Code-block language for syntax highlighting         |
-| `table`     | `TableData` when `kind == .table`                   |
-| `imagePath` | Relative image path when `kind == .image`           |
+| `id`        | A unique `UUID` — used for lists, dragging, selection |
+| `kind`      | The block type (paragraph, heading, list, code, …)  |
+| `text`      | `NSAttributedString` — the styled text (bold/italic) |
+| `checked`   | Whether a to-do box is checked                       |
+| `depth`     | How indented the block is (0 = top level)            |
+| `language`  | Code language, used for syntax highlighting          |
+| `table`     | `TableData`, only used when `kind == .table`         |
+| `imagePath` | Path to the image, only used when `kind == .image`   |
 
-The block's **position is not stored on the block** — order is simply its index
-in `document.blocks`. That is what makes reordering trivial.
+A block does **not** store its own position — its order just comes from its
+place in `document.blocks`. This makes reordering easy.
 
-### `EditorDocument` — the single source of truth
+### `EditorDocument` — where everything is stored
 
-`EditorView` holds one `@State private var document: EditorDocument`. The
-document owns:
+`EditorView` keeps one `@State private var document: EditorDocument`. This
+document holds:
 
-- `blocks: [Block]` — the ordered content.
-- `focusedBlockID` / `focusAtStart` — which block gets the keyboard caret, and
-  whether the caret lands at the start (used after merges/deletes).
-- `selectedBlockIDs` — block-level selection (marquee / `⌘A`).
-- `pendingCaretLocation` — a one-shot request to place the caret at an exact
-  offset (used when Backspace merges two blocks).
-- `autosaveSignal` — a debounced Combine publisher (fires ~2s after the last
-  edit). Every mutation calls `markEdited()`, which drives autosave.
+- `blocks: [Block]` — the list of content, in order.
+- `focusedBlockID` / `focusAtStart` — which block has the cursor, and whether
+  the cursor should go to the start (used after merging or deleting blocks).
+- `selectedBlockIDs` — which whole blocks are selected (by dragging, or
+  `⌘A`).
+- `pendingCaretLocation` — a one-time request to put the cursor at an exact
+  spot (used when Backspace joins two blocks together).
+- `autosaveSignal` — waits about 2 seconds after your last edit, then saves.
+  Every change calls `markEdited()`, which starts this timer.
 
-All edits go through document methods (`insertBlock`, `deleteAndFocusPrevious`,
-`mergeIntoPrevious`, `changeKind`, `duplicate`, `indent`/`outdent`, `move…`).
-Views call these; they never reorder the array by hand.
+Every edit goes through document methods like `insertBlock`,
+`deleteAndFocusPrevious`, `mergeIntoPrevious`, `changeKind`, `duplicate`,
+`indent`/`outdent`, and `move…`. Views always call these methods — they never
+change the block list directly.
 
-### Sorting / reordering (drag-to-reorder)
+### Reordering blocks (drag and drop)
 
-Reordering is **index math on `document.blocks`** driven by a drag gesture:
+Reordering just moves items around in `document.blocks`, based on where you
+drag:
 
-1. Each visible row publishes its frame via a SwiftUI `PreferenceKey`
-   (`RowFramePreference`) into `rowFrames: [UUID: CGRect]`. To stay cheap, frames
-   are only measured while a drag or marquee is active (`framesActive`).
-2. On drag, `reorder(toY:)` walks the *other* blocks and finds the first one
-   whose vertical midpoint is below the pointer — that index becomes the drop
-   slot.
-3. It early-returns if the target slot hasn't actually changed (avoids churn),
-   then calls `document.move(id:toIndexAmongOthers:)` inside a `withAnimation`.
-4. `move(id:toIndexAmongOthers:)` removes the dragged block and re-inserts it at
-   the clamped index — the array *is* the order, so the UI updates automatically.
+1. Each visible row reports its position on screen (using SwiftUI's
+   `RowFramePreference`), stored in `rowFrames: [UUID: CGRect]`. To save
+   performance, this is only tracked while you are dragging or selecting.
+2. While dragging, `reorder(toY:)` checks the other blocks and finds the
+   first one whose middle is below your pointer — that spot becomes the drop
+   location.
+3. If the drop location hasn't changed, nothing happens (to avoid extra
+   updates). Otherwise it calls `document.move(id:toIndexAmongOthers:)` with
+   an animation.
+4. `move(id:toIndexAmongOthers:)` takes the block out and puts it back in at
+   the new spot. Since the list order *is* the display order, the screen
+   updates automatically.
 
-Because rows use a `LazyVStack`, only on-screen rows have frames; reordering
-targets what the user can actually see (there's no drag auto-scroll).
+Because rows use a `LazyVStack`, only rows currently on screen have known
+positions — you can only drop a block where you can see it (there's no
+auto-scroll while dragging).
 
-### Focus & caret flow
+### Focus and cursor
 
-Views don't fight over focus. A mutation sets `focusedBlockID` (and optionally
-`focusAtStart` or `pendingCaretLocation`); `BlockTextView` observes those and
-moves the real `NSTextView` caret. Example: pressing Backspace at the start of a
-block calls `mergeIntoPrevious`, which appends the text, removes the block, and
-sets `pendingCaretLocation` to the join offset so the caret lands exactly where
-the two blocks met.
+Views don't fight over the cursor. When something changes, it sets
+`focusedBlockID` (and sometimes `focusAtStart` or `pendingCaretLocation`).
+`BlockTextView` watches these values and moves the real cursor. Example:
+pressing Backspace at the start of a block joins it with the block above,
+removes the empty block, and places the cursor exactly where the two blocks
+met.
 
-### Block-level selection
+### Selecting whole blocks
 
-Dragging across the margins (marquee) or pressing `⌘A` sets `selectedBlockIDs`
-and drops text focus. A global key monitor in `EditorView` then routes
-Copy/Cut/Delete/Escape to whole-block operations — copy serializes the selected
-blocks back to Markdown via `MarkdownCodec`.
+Dragging across the left margin, or pressing `⌘A`, selects whole blocks (not
+just text) and removes text focus. A key listener in `EditorView` then sends
+Copy/Cut/Delete/Escape to these selected blocks — copying turns the selected
+blocks into Markdown text using `MarkdownCodec`.
 
-Selection can also start as a normal text drag and escalate: a `BlockTextView`
-drag that crosses its own block's edge switches from character selection to
-whole-block selection (via a custom `NSTextView` event-tracking loop), and
-dragging back de-escalates while keeping the original anchor — a Notion-style
-cross-block select.
+You can also start a normal text selection and turn it into a block
+selection: if you drag past the edge of the current block, it switches from
+selecting characters to selecting whole blocks (like Notion). Dragging back
+switches back to character selection, without losing your starting point.
 
 ### Popups
 
-Two SwiftUI `.popover`s hang off each block row (`BlockRowView`), so they float
-next to the block that opened them and dismiss on outside-click.
+Each block row (`BlockRowView`) can show two small popup menus that appear
+next to it and close when you click outside.
 
-**The `/` command menu (`SlashMenu`)** — insert a block type:
+**The `/` menu (`SlashMenu`)** — used to add a new block type:
 
-- Typing `/` on an empty-ish line calls `onSlash`, which sets `showSlashMenu`
-  and opens the popover below the caret (`arrowEdge: .bottom`).
-- As you keep typing, `syncSlashMenuQuery()` reads the text *after* the `/` and
-  feeds it to the menu as a live filter — so filtering works even though the
-  caret stays in the block, not in the popup's search field.
-- The menu filters `BlockKind.allCases` by title/name, is fully keyboard-driven
-  (`↑`/`↓` to move, `Return` to pick, `Esc` to cancel), and wraps around.
-- Picking a kind strips the `/query` text and converts the block. Each row shows
-  the type's icon, title, and subtitle.
+- Typing `/` on an empty-ish line opens this menu below the cursor.
+- As you keep typing, the text after `/` filters the list live — even though
+  your cursor stays in the block, not in the popup.
+- You can filter by name, and use `↑`/`↓` to move, `Return` to pick, and
+  `Esc` to cancel. The list wraps around at the top/bottom.
+- Picking an item removes the `/query` text and turns the block into that
+  type. Each row shows an icon, a name, and a short description.
 
-**The block action menu (`BlockActionMenu`)** — act on an existing block:
+**The block action menu (`BlockActionMenu`)** — used to act on a block that
+already exists:
 
-- Every row shows a drag handle (`=`) on hover. **Click** it → opens this
-  popover (`arrowEdge: .leading`); **drag** it → reorders (same handle, two
-  gestures).
-- It's a searchable action list: a **"Turn into"** section (convert between text
-  kinds via `changeKind`), **Duplicate**, and **Delete**.
-- It adapts to the block type — e.g. a table block adds **Header row / Header
-  column** toggles bound straight to that block's `TableData`.
-- Typing in its search field filters actions and hides section headers.
+- Hover over a row to see a drag handle (`=`). **Click** it to open this
+  menu; **drag** it to reorder the block.
+- It's a searchable list of actions: **"Turn into"** (change the block type),
+  **Duplicate**, and **Delete**.
+- It changes based on block type — for example, a table block also shows
+  toggles for a header row or header column.
+- Typing in the search box filters the list.
 
-Both popups share the same look (material background, rounded corners, subtle
-shadow) and auto-focus their search field on open.
+Both popups look the same (frosted background, rounded corners, soft shadow)
+and put the cursor in the search box automatically when opened.
 
-### Persistence
+### Saving files
 
-`MarkdownCodec.encode` turns `document.blocks` into Markdown;
-`MarkdownCodec.decode` turns Markdown back into `[Block]`. Autosave writes to the
-open `.md` file (or the local `DocumentStore`) only when the serialized output
-actually changed.
+`MarkdownCodec.encode` turns `document.blocks` into a Markdown file.
+`MarkdownCodec.decode` turns a Markdown file back into blocks. Autosave only
+writes to the `.md` file when the content has actually changed.
+
+### Windows and opening files
+
+The New and Open menu actions are handled in `FileCommands`
+(`App/MyaeEditorApp.swift`). They work even when there is **no window open**
+(for example, right after you close the last window):
+
+- **New** opens a new window.
+- **Open** shows the file picker first. If a window is already open, the file
+  loads into it. If not, a new window opens and the file loads there.
+- The Open picker only shows `.md` files.
+- If you pick a file before any window exists, the file path is remembered in
+  `LaunchIntent.pendingOpenURL` until a new window opens and loads it.
 
 ## Keyboard Shortcuts
 
