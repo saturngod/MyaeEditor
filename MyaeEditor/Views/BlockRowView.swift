@@ -113,7 +113,12 @@ struct BlockRowView: View {
                 .gesture(
                     DragGesture(minimumDistance: 2, coordinateSpace: .named("editor"))
                         .onChanged { value in
-                            if draggingID != block.id { draggingID = block.id }
+                            if draggingID != block.id {
+                                draggingID = block.id
+                                // Reordering invalidates any block-range selection
+                                // (its anchor/lead positions shift), so drop it.
+                                document.clearSelection()
+                            }
                             onDragChanged(value.location.y)
                         }
                         .onEnded { _ in onDragEnded() }

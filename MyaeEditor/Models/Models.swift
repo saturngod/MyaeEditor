@@ -290,9 +290,13 @@ final class EditorDocument {
             selectedBlockIDs = [start]
             focusedBlockID = nil
         }
-        // After Select-All or a marquee drag there's no anchor yet: pin it to the
-        // far end so this press grows the selection from the near end.
-        if selectionAnchorID == nil || selectionLeadID == nil {
+        // Re-pin the anchor/lead when either is missing or no longer in the
+        // document — after Select-All, a marquee drag, or a block deletion that
+        // left a dangling id. Pin the anchor to the far end so this press grows
+        // the selection from the near end.
+        let anchorAlive = selectionAnchorID.map { id in blocks.contains { $0.id == id } } ?? false
+        let leadAlive = selectionLeadID.map { id in blocks.contains { $0.id == id } } ?? false
+        if !anchorAlive || !leadAlive {
             let idxs = blocks.indices.filter { selectedBlockIDs.contains(blocks[$0].id) }
             guard let first = idxs.first, let last = idxs.last else { return }
             selectionAnchorID = blocks[up ? last : first].id

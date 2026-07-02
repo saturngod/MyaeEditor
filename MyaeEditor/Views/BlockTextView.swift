@@ -344,8 +344,13 @@ struct BlockTextView: NSViewRepresentable {
                 }
                 return false
 
+            // Escalate to block selection only from a collapsed caret at the
+            // boundary. With a text selection already present, selectedRange()
+            // .location is the fixed anchor (not the moving end), so testing it
+            // would misfire — let the text view extend/shrink its own selection.
             case #selector(NSResponder.moveUpAndModifySelection(_:)):
-                if (textView as? AutoSizingTextView)?.caretIsOnFirstLine() == true,
+                if textView.selectedRange().length == 0,
+                   (textView as? AutoSizingTextView)?.caretIsOnFirstLine() == true,
                    parent.onExtendSelectionUp() {
                     textView.window?.makeFirstResponder(nil)
                     return true
@@ -353,7 +358,8 @@ struct BlockTextView: NSViewRepresentable {
                 return false
 
             case #selector(NSResponder.moveDownAndModifySelection(_:)):
-                if (textView as? AutoSizingTextView)?.caretIsOnLastLine() == true,
+                if textView.selectedRange().length == 0,
+                   (textView as? AutoSizingTextView)?.caretIsOnLastLine() == true,
                    parent.onExtendSelectionDown() {
                     textView.window?.makeFirstResponder(nil)
                     return true

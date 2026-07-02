@@ -36,6 +36,23 @@ struct RowFramePreference: PreferenceKey {
     }
 }
 
+/// A mutable reference cell for the hosting NSWindow, captured (weakly) by the
+/// key monitor so it can scope events to its own window.
+final class WindowBox { weak var window: NSWindow? }
+
+/// Resolves the NSWindow that hosts this SwiftUI view and reports it back.
+private struct WindowAccessor: NSViewRepresentable {
+    let onResolve: (NSWindow?) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        DispatchQueue.main.async { [weak v] in onResolve(v?.window) }
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { [weak nsView] in onResolve(nsView?.window) }
+    }
+}
+
 struct EditorView: View {
     @State private var document: EditorDocument
     @State private var lastSaved: String
@@ -50,6 +67,9 @@ struct EditorView: View {
     // Marquee (drag-to-select) state.
     @State private var marqueeStart: CGFloat?
     @State private var keyMonitor: Any?
+    /// Holds this view's hosting window so the app-wide key monitor can ignore
+    /// events belonging to other windows or panels.
+    @State private var windowBox = WindowBox()
 
     // Cross-block text-selection drag (escalates to whole-block selection).
     @State private var crossDragging = false
@@ -150,6 +170,7 @@ struct EditorView: View {
             .onPreferenceChange(RowFramePreference.self) { rowFrames = $0 }
         }
         .background(Color(nsColor: .textBackgroundColor))
+        .background(WindowAccessor { windowBox.window = $0 })
         .onAppear { installKeyMonitor(); updateWindowTitle() }
         .onDisappear { removeKeyMonitor(); formatBar.hide() }
         .onReceive(document.autosaveSignal) { _ in saveIfChanged() }
@@ -293,6 +314,9 @@ struct EditorView: View {
                     marqueeStart = value.startLocation.y
                     titleFocused = false
                     formatBar.hide()
+                    // Drop any text caret so the block selection stands alone and
+                    // the key monitor (not the text view) handles Shift+Arrow.
+                    windowBox.window?.makeFirstResponder(nil)
                 }
                 document.selectBlocks(intersecting: marqueeStart!, value.location.y, frames: rowFrames)
             }
@@ -302,48 +326,57 @@ struct EditorView: View {
     // MARK: Block-selection key handling (Copy / Delete / Escape / Cmd+A)
 
     private func installKeyMonitor() {
-        let doc = document
-        let copy: () -> Void = { [weak doc] in
-            guard let doc else { return }
+        let copy: (EditorDocument) -> Void = { doc in
             let selected = doc.selectedBlocksInOrder
             guard !selected.isEmpty else { return }
             let markdown = MarkdownCodec.encode(EditorDocument(blocks: selected))
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(markdown, forType: .string)
         }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let cmd = event.modifierFlags.contains(.command)
-            // Cmd+A when no text block is being edited: select every block so the
-            // whole document can be deleted/copied without dragging. While a text
-            // block is focused, the BlockTextView handles Cmd+A itself (select the
-            // block's text first, then escalate to all blocks on a second press).
-            if cmd, event.charactersIgnoringModifiers == "a",
-               !(event.window?.firstResponder is NSTextView) {
+        // Key codes are physical (layout-independent), so Cmd+A works on any
+        // keyboard layout — unlike matching charactersIgnoringModifiers.
+        let A: UInt16 = 0, C: UInt16 = 8, X: UInt16 = 7
+        let up: UInt16 = 126, down: UInt16 = 125
+        let box = windowBox
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak document] event in
+            guard let doc = document else { return event }
+            // Local monitors are app-wide: only act on events for this editor's
+            // own window, never panels (Open/Save) or other editor windows.
+            guard let w = event.window, w === box.window else { return event }
+            let mods = event.modifierFlags
+            let cmd = mods.contains(.command)
+            let editingText = w.firstResponder is NSTextView
+
+            // Cmd+A with no text field focused: select every block so the whole
+            // document can be deleted/copied without dragging. While a text block
+            // is focused, BlockTextView handles Cmd+A itself (select the block's
+            // text first, then escalate to all blocks on a second press).
+            if cmd, event.keyCode == A, !editingText {
                 doc.selectAllBlocks(); return nil
             }
             guard !doc.selectedBlockIDs.isEmpty else { return event }
-            let shift = event.modifierFlags.contains(.shift)
+
             switch event.keyCode {
             case 53:                                   // Escape
                 doc.clearSelection(); return nil
             case 51, 117:                              // Delete / Forward-delete
                 doc.deleteSelectedBlocks(); return nil
-            case 126 where shift:                      // Shift+Up: extend up
-                doc.extendBlockSelection(up: true); return nil
-            case 125 where shift:                      // Shift+Down: extend down
-                doc.extendBlockSelection(up: false); return nil
             default: break
             }
-            if cmd, event.charactersIgnoringModifiers == "a" {
-                doc.selectAllBlocks(); return nil
-            }
-            if cmd, event.charactersIgnoringModifiers == "c" {
-                copy(); return nil
-            }
-            if cmd, event.charactersIgnoringModifiers == "x" {
-                copy(); doc.deleteSelectedBlocks(); return nil
-            }
-            if !cmd { doc.clearSelection() }
+            // Shift+Up / Shift+Down (Shift alone) extend the block selection.
+            // Other chords (Cmd/Opt/Ctrl+Shift+Arrow) fall through to the system.
+            let onlyShift = mods.contains(.shift)
+                && mods.isDisjoint(with: [.command, .option, .control])
+            if onlyShift, event.keyCode == up { doc.extendBlockSelection(up: true); return nil }
+            if onlyShift, event.keyCode == down { doc.extendBlockSelection(up: false); return nil }
+
+            if cmd, event.keyCode == A { doc.selectAllBlocks(); return nil }
+            if cmd, event.keyCode == C { copy(doc); return nil }
+            if cmd, event.keyCode == X { copy(doc); doc.deleteSelectedBlocks(); return nil }
+
+            // A bare keypress (no Cmd, no Shift) collapses the selection; Shift is
+            // spared so an unhandled Shift+Arrow doesn't silently wipe it.
+            if !cmd, !mods.contains(.shift) { doc.clearSelection() }
             return event
         }
     }
