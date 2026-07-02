@@ -247,13 +247,23 @@ struct BlockRowView: View {
     /// their baseline sits far lower; measuring the block's own text lets us drop
     /// each marker to that baseline instead of leaving it pinned near the top.
     private var textBaseline: CGFloat {
-        let probe = block.plainText.isEmpty ? "ကg" : String(block.plainText.prefix(20))
+        // An empty block renders its line at the font's natural (Latin) height, so
+        // probe with Latin here. Using a Burmese glyph would overstate the ascent and
+        // drop the marker below the empty line until the first character is typed.
+        let probe = block.plainText.isEmpty ? "Ag" : String(block.plainText.prefix(20))
         return 2 + typographic(block.kind.baseFont, probe).ascent   // 2 = textContainerInset.height
     }
 
     /// Top padding that drops a marker so its bottom lands on the text baseline.
+    /// Right for a round bullet dot, whose visual center sits near mid x-height.
     private func markerTop(font: NSFont, glyph: String) -> CGFloat {
         max(0, textBaseline - typographic(font, glyph).height)
+    }
+
+    /// Top padding that drops a marker so its own baseline lands on the text
+    /// baseline. Use for numbers, whose baseline (not bottom) must match the text.
+    private func markerBaselineTop(font: NSFont, glyph: String) -> CGFloat {
+        max(0, textBaseline - typographic(font, glyph).ascent)
     }
 
     /// Top padding that drops the hover controls so their center lands on the
@@ -278,7 +288,7 @@ struct BlockRowView: View {
                 .font(.system(size: 15, weight: .regular, design: .rounded))
                 .foregroundStyle(.secondary)
                 .frame(width: markerWidth, alignment: .trailing)
-                .padding(.top, markerTop(font: .systemFont(ofSize: 15), glyph: "0"))
+                .padding(.top, markerBaselineTop(font: .systemFont(ofSize: 15), glyph: "0"))
         case .todo:
             Button {
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.55)) { block.checked.toggle() }
