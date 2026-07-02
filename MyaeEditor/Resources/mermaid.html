@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Render host for MermaidWebView.swift. Bundled mermaid 11.16.0. -->
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; }
+  #container { width: 100%; }
+  #container svg { display: block; max-width: 100%; height: auto; }
+</style>
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<div id="container"></div>
+<script>
+let seq = 0;
+
+// Render `code` into #container at the current page width and return the rendered
+// height in CSS px. Throws (rejects) on a mermaid syntax error — the message
+// surfaces to Swift, which sizes the web view to the returned height.
+//   theme: 'default' | 'dark'
+//   bg:    opaque page background hex, so it blends with the block card
+async function renderMermaid(code, theme, bg) {
+  document.documentElement.style.background = bg;
+  document.body.style.background = bg;
+
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: theme,
+    securityLevel: 'strict',
+    suppressErrorRendering: true,
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif'
+  });
+
+  await mermaid.parse(code);   // throws a readable syntax error before rendering
+
+  const id = 'm' + (++seq);
+  const { svg } = await mermaid.render(id, code);
+
+  const c = document.getElementById('container');
+  c.innerHTML = svg;
+  const el = c.querySelector('svg');
+  if (!el) throw new Error('mermaid produced no SVG');
+
+  // Responsive: fit the page width, keep aspect ratio. mermaid already sets
+  // max-width; the stylesheet enforces height:auto so it scales as one piece.
+  el.removeAttribute('height');
+  el.style.maxWidth = '100%';
+  el.style.height = 'auto';
+
+  // Let styles settle, then measure. setTimeout (unlike requestAnimationFrame) still
+  // fires when the web view isn't on screen, so an off-screen block never hangs here.
+  // getBoundingClientRect forces a synchronous layout, so the height is accurate.
+  await new Promise(function (r) { setTimeout(r, 0); });
+  return Math.ceil(el.getBoundingClientRect().height);
+}
+</script>
+</body>
+</html>

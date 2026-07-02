@@ -162,12 +162,19 @@ struct BlockRowView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
         case .code:
-            VStack(alignment: .leading, spacing: 6) {
-                codeHeader
-                textEditor
+            if block.language == .mermaid && !isFocused && !block.isEmpty {
+                MermaidBlockView(document: document, block: block)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)   // fill the row width, showing the diagram
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    codeHeader
+                    textEditor
+                }
+                .padding(12)
+                .background(codeBackground)
             }
-            .padding(12)
-            .background(codeBackground)
         case .quote:
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 2)

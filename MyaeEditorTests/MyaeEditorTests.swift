@@ -76,4 +76,20 @@ struct MyaeEditorTests {
         #expect(text.attribute(.inlineCode, at: 0, effectiveRange: nil) as? Bool != true)
     }
 
+    /// A ```mermaid fence decodes to a `.code` block tagged `.mermaid`, and encodes
+    /// back to the same fence — so mermaid blocks persist without a codec change.
+    @Test func mermaidFenceRoundTrips() {
+        let md = "```mermaid\ngraph TD\n  A --> B\n```"
+        let blocks = MarkdownCodec.decode(md)
+        #expect(blocks.count == 1)
+        #expect(blocks[0].kind == .code)
+        #expect(blocks[0].language == .mermaid)
+        #expect(blocks[0].plainText == "graph TD\n  A --> B")
+        #expect(MarkdownCodec.encode(EditorDocument(blocks: blocks)) == md)
+    }
+
+    // The live diagram render runs in an inline WKWebView and is verified by
+    // running the app (it needs an app event loop, which a plain `xcodebuild test`
+    // host doesn't provide).
+
 }
