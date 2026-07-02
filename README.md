@@ -14,9 +14,12 @@ Markdown.
 - **Floating format bar** — select text to make it bold, italic, strikethrough,
   or inline code.
 - **Code blocks** — syntax highlighting for Swift, Python, JavaScript,
-  TypeScript, JSON, HTML, CSS, Shell, Go, Rust, C, C++, Java, Ruby, SQL, YAML.
-- **Tables** — add or remove rows and columns with a right-click menu on each
-  cell.
+  TypeScript, JSON, HTML, CSS, Shell, Go, Rust, C, C++, C#, Java, Kotlin, PHP,
+  Ruby, SQL, YAML.
+- **Mermaid diagrams** — set a code block's language to Mermaid to render it
+  live as a diagram.
+- **Tables** — add or remove rows and columns, and set per-column alignment
+  (left/center/right), with a right-click menu on each cell.
 - **Math** — inline math and math blocks (rendered like LaTeX).
 - **Images** — add images as blocks.
 - **Drag to reorder** — grab a block and move it; select many blocks at once
@@ -62,6 +65,7 @@ MyaeEditor/
                 FormatBar                       Floating inline-format toolbar
                 TableBlockView, ImageBlockView  Rich block types
                 InlineMath                       Math editing + rendering
+                MermaidBlockView, MermaidWebView Mermaid diagram rendering (WKWebView)
 ```
 
 ### Why MV, not MVVM
