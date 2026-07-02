@@ -290,6 +290,8 @@ struct BlockRowView: View {
             onBackspaceAtStart: handleBackspaceAtStart,
             onArrowUpAtTop: { moveFocus(up: true) },
             onArrowDownAtBottom: { moveFocus(up: false) },
+            onExtendSelectionUp: { document.extendBlockSelection(up: true, from: block.id); return true },
+            onExtendSelectionDown: { document.extendBlockSelection(up: false, from: block.id); return true },
             onTab: { document.indent(block); return true },          // always consume Tab
             onShiftTab: { document.outdent(block); return true },     // always consume Shift-Tab
             onSlash: { showSlashMenu = true; slashQuery = "" },

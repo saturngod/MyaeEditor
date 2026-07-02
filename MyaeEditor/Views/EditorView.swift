@@ -312,13 +312,26 @@ struct EditorView: View {
             NSPasteboard.general.setString(markdown, forType: .string)
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard !doc.selectedBlockIDs.isEmpty else { return event }
             let cmd = event.modifierFlags.contains(.command)
+            // Cmd+A when no text block is being edited: select every block so the
+            // whole document can be deleted/copied without dragging. While a text
+            // block is focused, the BlockTextView handles Cmd+A itself (select the
+            // block's text first, then escalate to all blocks on a second press).
+            if cmd, event.charactersIgnoringModifiers == "a",
+               !(event.window?.firstResponder is NSTextView) {
+                doc.selectAllBlocks(); return nil
+            }
+            guard !doc.selectedBlockIDs.isEmpty else { return event }
+            let shift = event.modifierFlags.contains(.shift)
             switch event.keyCode {
             case 53:                                   // Escape
                 doc.clearSelection(); return nil
             case 51, 117:                              // Delete / Forward-delete
                 doc.deleteSelectedBlocks(); return nil
+            case 126 where shift:                      // Shift+Up: extend up
+                doc.extendBlockSelection(up: true); return nil
+            case 125 where shift:                      // Shift+Down: extend down
+                doc.extendBlockSelection(up: false); return nil
             default: break
             }
             if cmd, event.charactersIgnoringModifiers == "a" {

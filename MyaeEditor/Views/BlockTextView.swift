@@ -45,6 +45,11 @@ struct BlockTextView: NSViewRepresentable {
     var onBackspaceAtStart: () -> Bool
     var onArrowUpAtTop: () -> Bool
     var onArrowDownAtBottom: () -> Bool
+    /// Shift+Up on the first line / Shift+Down on the last line: escalate to a
+    /// block-level selection that includes the neighbour block. Return true to
+    /// consume the key (else the text view extends its own text selection).
+    var onExtendSelectionUp: () -> Bool = { false }
+    var onExtendSelectionDown: () -> Bool = { false }
     var onTab: () -> Bool
     var onShiftTab: () -> Bool
     var onSlash: () -> Void
@@ -336,6 +341,22 @@ struct BlockTextView: NSViewRepresentable {
             case #selector(NSResponder.moveDown(_:)):
                 if (textView as? AutoSizingTextView)?.caretIsOnLastLine() == true {
                     return parent.onArrowDownAtBottom()
+                }
+                return false
+
+            case #selector(NSResponder.moveUpAndModifySelection(_:)):
+                if (textView as? AutoSizingTextView)?.caretIsOnFirstLine() == true,
+                   parent.onExtendSelectionUp() {
+                    textView.window?.makeFirstResponder(nil)
+                    return true
+                }
+                return false
+
+            case #selector(NSResponder.moveDownAndModifySelection(_:)):
+                if (textView as? AutoSizingTextView)?.caretIsOnLastLine() == true,
+                   parent.onExtendSelectionDown() {
+                    textView.window?.makeFirstResponder(nil)
+                    return true
                 }
                 return false
 

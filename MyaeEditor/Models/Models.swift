@@ -218,6 +218,10 @@ final class EditorDocument {
     /// Block-level selection (set via Cmd+A escalation or marquee drag). When
     /// non-empty, no text view holds focus and key commands act on whole blocks.
     var selectedBlockIDs: Set<UUID> = []
+    /// Fixed end of a keyboard (Shift+Arrow) block selection; the lead is the
+    /// moving end. Not observed — they only steer `selectedBlockIDs`.
+    @ObservationIgnored var selectionAnchorID: UUID?
+    @ObservationIgnored var selectionLeadID: UUID?
 
     /// Fires whenever the document content changes. Drives debounced autosave.
     /// (Not @Observable-tracked, so it doesn't re-render the view on every edit.)
@@ -249,6 +253,8 @@ final class EditorDocument {
     /// key commands (Copy / Delete) act on whole blocks.
     func selectAllBlocks() {
         selectedBlockIDs = Set(blocks.map(\.id))
+        selectionAnchorID = nil
+        selectionLeadID = nil
         focusedBlockID = nil
     }
 
@@ -261,12 +267,44 @@ final class EditorDocument {
             return f.maxY >= lo && f.minY <= hi
         }
         selectedBlockIDs = Set(hits.map(\.id))
+        selectionAnchorID = nil
+        selectionLeadID = nil
         if !selectedBlockIDs.isEmpty { focusedBlockID = nil }
     }
 
     func clearSelection() {
         guard !selectedBlockIDs.isEmpty else { return }
         selectedBlockIDs.removeAll()
+        selectionAnchorID = nil
+        selectionLeadID = nil
+    }
+
+    /// Grow or shrink the block-level selection by one block toward the top
+    /// (`up`) or bottom. If nothing is selected yet, start at `from` (or the
+    /// focused block) and drop text focus so the selection shows on its own.
+    func extendBlockSelection(up: Bool, from startID: UUID? = nil) {
+        if selectedBlockIDs.isEmpty {
+            guard let start = startID ?? focusedBlockID ?? blocks.first?.id else { return }
+            selectionAnchorID = start
+            selectionLeadID = start
+            selectedBlockIDs = [start]
+            focusedBlockID = nil
+        }
+        // After Select-All or a marquee drag there's no anchor yet: pin it to the
+        // far end so this press grows the selection from the near end.
+        if selectionAnchorID == nil || selectionLeadID == nil {
+            let idxs = blocks.indices.filter { selectedBlockIDs.contains(blocks[$0].id) }
+            guard let first = idxs.first, let last = idxs.last else { return }
+            selectionAnchorID = blocks[up ? last : first].id
+            selectionLeadID = blocks[up ? first : last].id
+        }
+        guard let anchor = selectionAnchorID, let lead = selectionLeadID,
+              let anchorIdx = blocks.firstIndex(where: { $0.id == anchor }),
+              let leadIdx = blocks.firstIndex(where: { $0.id == lead }) else { return }
+        let newLead = up ? max(0, leadIdx - 1) : min(blocks.count - 1, leadIdx + 1)
+        selectionLeadID = blocks[newLead].id
+        let lo = min(anchorIdx, newLead), hi = max(anchorIdx, newLead)
+        selectedBlockIDs = Set(blocks[lo...hi].map(\.id))
     }
 
     /// Delete all selected blocks, then focus the block that takes their place.
@@ -275,6 +313,8 @@ final class EditorDocument {
         let firstIdx = blocks.firstIndex { selectedBlockIDs.contains($0.id) } ?? 0
         blocks.removeAll { selectedBlockIDs.contains($0.id) }
         selectedBlockIDs.removeAll()
+        selectionAnchorID = nil
+        selectionLeadID = nil
         if blocks.isEmpty { blocks = [Block()] }
         let target = blocks[min(firstIdx, blocks.count - 1)]
         focusedBlockID = target.id

@@ -1,0 +1,4 @@
+*.dmg
+build/
+.DS_Store
+xcuserdata/
