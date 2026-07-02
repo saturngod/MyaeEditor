@@ -43,7 +43,8 @@ enum MarkdownCodec {
                 for (idx, row) in t.cells.enumerated() {
                     lines.append("| " + row.map(escapeCell).joined(separator: " | ") + " |")
                     if idx == 0 {
-                        lines.append("| " + row.map { _ in "---" }.joined(separator: " | ") + " |")
+                        let seps = (0 ..< row.count).map { separatorCell(t.alignment($0)) }
+                        lines.append("| " + seps.joined(separator: " | ") + " |")
                     }
                 }
             case .code:
@@ -135,6 +136,28 @@ enum MarkdownCodec {
          .replacingOccurrences(of: "|", with: "\\|")
     }
 
+    /// The GFM separator cell for a column alignment.
+    private static func separatorCell(_ a: ColumnAlignment) -> String {
+        switch a {
+        case .left:   return ":---"
+        case .center: return ":---:"
+        case .right:  return "---:"
+        case .none:   return "---"
+        }
+    }
+
+    /// The alignment encoded by a single separator cell (`:---:` etc.).
+    private static func alignment(ofSeparatorCell cell: String) -> ColumnAlignment {
+        let c = cell.trimmingCharacters(in: .whitespaces)
+        let left = c.hasPrefix(":"), right = c.hasSuffix(":")
+        switch (left, right) {
+        case (true, true):  return .center
+        case (true, false): return .left
+        case (false, true): return .right
+        default:            return .none
+        }
+    }
+
     /// A GFM separator row: every cell is dashes (optionally colon-aligned).
     private static func isSeparatorRow(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
@@ -191,7 +214,7 @@ enum MarkdownCodec {
             // Fenced code block.
             if trimmed.hasPrefix("```") {
                 let info = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces).lowercased()
-                let language = CodeLanguage(rawValue: info) ?? .plain
+                let language = CodeLanguage.resolve(info)
                 var code: [String] = []
                 i += 1
                 while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
@@ -229,6 +252,8 @@ enum MarkdownCodec {
             // Table: a "| ... |" row followed by a separator row.
             if trimmed.hasPrefix("|"), i + 1 < lines.count, isSeparatorRow(lines[i + 1]) {
                 let header = parseRow(trimmed)
+                let alignments = normalize(parseRow(lines[i + 1]), to: header.count)
+                    .map { alignment(ofSeparatorCell: $0) }
                 var rows: [[String]] = [header]
                 i += 2   // skip header + separator
                 while i < lines.count {
@@ -237,7 +262,7 @@ enum MarkdownCodec {
                     rows.append(normalize(parseRow(t), to: header.count))
                     i += 1
                 }
-                blocks.append(Block(kind: .table, table: TableData(cells: rows)))
+                blocks.append(Block(kind: .table, table: TableData(cells: rows, alignments: alignments)))
                 continue
             }
 

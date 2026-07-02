@@ -11,9 +11,23 @@ import AppKit
 
 enum CodeLanguage: String, CaseIterable, Identifiable, Codable {
     case plain, swift, python, javascript, typescript, json, html, css
-    case bash, go, rust, c, cpp, java, ruby, sql, yaml
+    case bash, go, rust, c, cpp, csharp, java, kotlin, php, ruby, sql, yaml
+    case mermaid
 
     var id: String { rawValue }
+
+    /// Map a fenced-code-block info string (already lowercased) to a language,
+    /// accepting common aliases (e.g. `cs`/`c#` → C#, `kt` → Kotlin). Falls back
+    /// to `.plain`. Used by MarkdownCodec when decoding ``` fences.
+    static func resolve(_ info: String) -> CodeLanguage {
+        switch info {
+        case "cs", "c#", "csharp": return .csharp
+        case "kt", "kts", "kotlin": return .kotlin
+        case "php", "php3", "php4", "php5": return .php
+        case "mermaid", "mmd": return .mermaid
+        default: return CodeLanguage(rawValue: info) ?? .plain
+        }
+    }
 
     var displayName: String {
         switch self {
@@ -30,25 +44,31 @@ enum CodeLanguage: String, CaseIterable, Identifiable, Codable {
         case .rust:       "Rust"
         case .c:          "C"
         case .cpp:        "C++"
+        case .csharp:     "C#"
         case .java:       "Java"
+        case .kotlin:     "Kotlin"
+        case .php:        "PHP"
         case .ruby:       "Ruby"
         case .sql:        "SQL"
         case .yaml:       "YAML"
+        case .mermaid:    "Mermaid"
         }
     }
 
-    var lineComment: String? {
+    var lineComments: [String] {
         switch self {
-        case .python, .bash, .ruby, .yaml: "#"
-        case .sql: "--"
-        case .json, .html, .css, .plain: nil
-        default: "//"
+        case .python, .bash, .ruby, .yaml: ["#"]
+        case .sql: ["--"]
+        case .php: ["//", "#"]
+        case .mermaid: ["%%"]
+        case .json, .html, .css, .plain: []
+        default: ["//"]
         }
     }
 
     var blockComment: (open: String, close: String)? {
         switch self {
-        case .swift, .javascript, .typescript, .c, .cpp, .java, .go, .rust, .css, .sql:
+        case .swift, .javascript, .typescript, .c, .cpp, .csharp, .java, .kotlin, .php, .go, .rust, .css, .sql:
             ("/*", "*/")
         case .html: ("<!--", "-->")
         default: nil
@@ -64,7 +84,7 @@ enum CodeLanguage: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    var caseInsensitiveKeywords: Bool { self == .sql }
+    var caseInsensitiveKeywords: Bool { self == .sql || self == .mermaid }
 
     var keywords: Set<String> {
         switch self {
@@ -112,6 +132,38 @@ enum CodeLanguage: String, CaseIterable, Identifiable, Codable {
              "goto","class","public","private","protected","namespace","template","new",
              "delete","this","nullptr","true","false","auto","using","virtual","override",
              "include","define"]
+        case .csharp:
+            ["abstract","as","base","bool","break","byte","case","catch","char","checked",
+             "class","const","continue","decimal","default","delegate","do","double","else",
+             "enum","event","explicit","extern","false","finally","fixed","float","for",
+             "foreach","goto","if","implicit","in","int","interface","internal","is","lock",
+             "long","namespace","new","null","object","operator","out","override","params",
+             "private","protected","public","readonly","ref","return","sbyte","sealed",
+             "short","sizeof","stackalloc","static","string","struct","switch","this",
+             "throw","true","try","typeof","uint","ulong","unchecked","unsafe","ushort",
+             "using","var","virtual","void","volatile","while","async","await","yield",
+             "get","set","value","nameof","when","where","global","partial","add","remove"]
+        case .kotlin:
+            // "!in"/"!is" are omitted: the tokenizer stops at "!", so the bare
+            // "in"/"is" entries already cover them.
+            ["as","break","class","continue","do","else","false","for","fun","if","in",
+             "interface","is","null","object","package","return","super",
+             "this","throw","true","try","typealias","typeof","val","var","when","while",
+             "by","catch","finally","get","set","import","init","constructor","data",
+             "sealed","enum","suspend","tailrec","annotation","companion","inline","noinline",
+             "crossinline","reified","operator","infix","vararg","lateinit","open","final",
+             "abstract","override","private","protected","public","internal","const",
+             "external","out","where","async","await","field","it"]
+        case .php:
+            ["abstract","and","array","as","break","callable","case","catch","class","clone",
+             "const","continue","declare","default","die","do","echo","else","elseif","empty",
+             "enddeclare","endfor","endforeach","endif","endswitch","endwhile","eval","exit",
+             "extends","final","finally","fn","for","foreach","function","global","goto","if",
+             "implements","include","include_once","instanceof","insteadof","interface","isset",
+             "list","match","namespace","new","or","print","private","protected","public",
+             "readonly","require","require_once","return","static","switch","throw","trait",
+             "try","unset","use","var","while","xor","yield","true","false","null","parent",
+             "self"]
         case .bash:
             ["if","then","else","elif","fi","for","while","do","done","case","esac",
              "function","return","in","echo","export","local","read","exit","break",
@@ -130,6 +182,21 @@ enum CodeLanguage: String, CaseIterable, Identifiable, Codable {
              "proc","puts"]
         case .json, .yaml:
             ["true","false","null"]
+        case .mermaid:
+            // Stored lowercase; lookup uppercases (case-insensitive), so any casing
+            // matches. Diagram types + structural directives across all diagram kinds.
+            // The tokenizer splits words at "-", so keywords are the bare leading
+            // word ("xychart", not "xychart-beta") — no hyphenated entries here.
+            ["graph","flowchart","sequencediagram","classdiagram","statediagram",
+             "erdiagram","gantt","pie","journey","mindmap","timeline","gitgraph","c4context",
+             "c4container","c4component","requirementdiagram","quadrantchart","xychart",
+             "block","architecture","sankey","packet","kanban",
+             "participant","actor","as","activate","deactivate","note","over",
+             "autonumber","loop","alt","else","opt","rect","end","linkstyle","class","direction",
+             "subgraph","accdesc","click","style","fill","stroke","classdef","state",
+             "transition","format","title","section","date","excludes","includes","todaymarker",
+             "axislabel","plot","accentdate","dateformat","axisformat","sunday",
+             "monday","tuesday","wednesday","thursday","friday","saturday"]
         default:
             []
         }
@@ -241,7 +308,7 @@ enum SyntaxHighlighter {
             }
 
             // line comment
-            if let lc = language.lineComment, matches(s, i, lc) {
+            if language.lineComments.contains(where: { matches(s, i, $0) }) {
                 let start = i
                 while i < end && s.character(at: i) != 10 { i += 1 }
                 emit(start, i, .comment); continue

@@ -175,7 +175,7 @@ struct EditorView: View {
         .onDisappear { removeKeyMonitor(); formatBar.hide() }
         .onReceive(document.autosaveSignal) { _ in saveIfChanged() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            saveIfChanged()
+            saveIfChanged(synchronous: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: .saveMarkdown)) { _ in
             saveNow()
@@ -195,7 +195,7 @@ struct EditorView: View {
     private func saveNow() {
         guard let url = fileURL else { runSaveAsPanel(); return }
         let markdown = MarkdownCodec.encode(document)
-        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+        EditorView.performWrite(markdown, to: url, synchronous: true)
         lastSaved = markdown
     }
 
@@ -233,7 +233,7 @@ struct EditorView: View {
         // runModal (not the async .begin) so the panel reliably comes to front when
         // launched from the Save As menu command.
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? markdown.write(to: url, atomically: true, encoding: .utf8)
+        EditorView.performWrite(markdown, to: url, synchronous: true)
         DocumentStore.currentFileURL = url      // subsequent autosaves go here
         fileURL = url
         lastSaved = markdown
@@ -249,16 +249,51 @@ struct EditorView: View {
         window.title = fileURL?.lastPathComponent ?? "MyaeEditor"
     }
 
-    /// Serialize and write to disk only when the Markdown actually changed.
-    private func saveIfChanged() {
-        let markdown = MarkdownCodec.encode(document)
-        guard markdown != lastSaved else { return }
-        if let url = fileURL {
-            try? markdown.write(to: url, atomically: true, encoding: .utf8)
+    /// Serial queue for all disk writes. A single FIFO queue guarantees writes
+    /// land in the order they were issued, so a slow background autosave can never
+    /// overwrite a newer manual save (Cmd+S / Save As). Shared across windows: the
+    /// blocks are ordered globally, which is harmless since each carries its own
+    /// destination.
+    private static let saveQueue = DispatchQueue(label: "com.myaeeditor.save", qos: .utility)
+
+    /// Write `markdown` to `url` (or the app-support store when `url` is nil),
+    /// through `saveQueue`. `synchronous` waits for this write *and* every write
+    /// already queued ahead of it to finish before returning — used by Cmd+S,
+    /// Save As, and app termination so the newest content is guaranteed on disk.
+    private static func performWrite(_ markdown: String, to url: URL?, synchronous: Bool) {
+        let work: () -> Void = {
+            if let url {
+                try? markdown.write(to: url, atomically: true, encoding: .utf8)
+            } else {
+                DocumentStore.save(markdown)
+            }
+        }
+        // A serial queue runs `sync` only after all previously-enqueued async work,
+        // so this both preserves ordering and blocks until the write completes.
+        if synchronous {
+            saveQueue.sync(execute: work)
         } else {
-            DocumentStore.save(markdown)
+            saveQueue.async(execute: work)
+        }
+    }
+
+    /// Serialize and write to disk only when the Markdown actually changed.
+    ///
+    /// Encoding walks every block's attributed text (font-trait lookups per run)
+    /// and the write is I/O — both would hitch typing if run inline on the debounce
+    /// tick. `encode` reads the live `@Observable` blocks, so it must run on the
+    /// main actor; only the write is handed to `saveQueue`. Pass `synchronous: true`
+    /// on app termination so a queued write can't be killed mid-flight by exit — it
+    /// also drains the queue when the content is already recorded as saved, since a
+    /// prior autosave's write may still be pending.
+    private func saveIfChanged(synchronous: Bool = false) {
+        let markdown = MarkdownCodec.encode(document)
+        guard markdown != lastSaved else {
+            if synchronous { EditorView.saveQueue.sync {} }   // flush any in-flight write
+            return
         }
         lastSaved = markdown
+        EditorView.performWrite(markdown, to: fileURL, synchronous: synchronous)
     }
 
     private func rowFrameReader(for block: Block) -> some View {

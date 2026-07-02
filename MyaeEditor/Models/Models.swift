@@ -169,26 +169,58 @@ final class Block: Identifiable {
     var plainText: String { text.string }
 }
 
+/// Horizontal alignment of a table column, matching GFM separator syntax
+/// (`:---` left, `:---:` center, `---:` right, `---` unspecified).
+enum ColumnAlignment: String {
+    case none, left, center, right
+
+    var textAlignment: TextAlignment {
+        switch self {
+        case .right:  return .trailing
+        case .center: return .center
+        default:      return .leading
+        }
+    }
+}
+
 /// A simple table: rows of string cells. Row 0 is treated as the header.
 @Observable
 final class TableData {
     var cells: [[String]]
+    /// Per-column horizontal alignment; kept the same length as `columnCount`.
+    var columnAlignments: [ColumnAlignment]
     /// Whether the first row / first column is styled as a header.
     var hasHeaderRow: Bool = true
     var hasHeaderColumn: Bool = false
 
     init(rows: Int = 3, columns: Int = 2) {
         cells = Array(repeating: Array(repeating: "", count: columns), count: rows)
+        columnAlignments = Array(repeating: .none, count: columns)
     }
-    init(cells: [[String]]) {
-        self.cells = cells.isEmpty ? [[""]] : cells
+    init(cells: [[String]], alignments: [ColumnAlignment]? = nil) {
+        let normalized = cells.isEmpty ? [[""]] : cells
+        self.cells = normalized
+        let n = normalized.first?.count ?? 0
+        var a = alignments ?? []
+        if a.count < n { a += Array(repeating: .none, count: n - a.count) }
+        columnAlignments = Array(a.prefix(n))
     }
 
     var rowCount: Int { cells.count }
     var columnCount: Int { cells.first?.count ?? 0 }
 
+    /// Alignment for column `c`, tolerant of a transiently out-of-range index.
+    func alignment(_ c: Int) -> ColumnAlignment {
+        columnAlignments.indices.contains(c) ? columnAlignments[c] : .none
+    }
+
+    func setAlignment(_ a: ColumnAlignment, column c: Int) {
+        guard columnAlignments.indices.contains(c) else { return }
+        columnAlignments[c] = a
+    }
+
     func addRow() { cells.append(Array(repeating: "", count: columnCount)) }
-    func addColumn() { for r in cells.indices { cells[r].append("") } }
+    func addColumn() { for r in cells.indices { cells[r].append("") }; columnAlignments.append(.none) }
 
     func insertRow(at i: Int) {
         cells.insert(Array(repeating: "", count: columnCount), at: min(max(i, 0), rowCount))
@@ -196,6 +228,7 @@ final class TableData {
     func insertColumn(at i: Int) {
         let at = min(max(i, 0), columnCount)
         for r in cells.indices { cells[r].insert("", at: at) }
+        columnAlignments.insert(.none, at: min(at, columnAlignments.count))
     }
     func deleteRow(at i: Int) {
         guard rowCount > 1, cells.indices.contains(i) else { return }
@@ -204,6 +237,7 @@ final class TableData {
     func deleteColumn(at i: Int) {
         guard columnCount > 1 else { return }
         for r in cells.indices where cells[r].indices.contains(i) { cells[r].remove(at: i) }
+        if columnAlignments.indices.contains(i) { columnAlignments.remove(at: i) }
     }
 }
 
@@ -266,10 +300,18 @@ final class EditorDocument {
             guard let f = frames[b.id] else { return false }
             return f.maxY >= lo && f.minY <= hi
         }
-        selectedBlockIDs = Set(hits.map(\.id))
+        let newSelection = Set(hits.map(\.id))
+        // A marquee always supersedes any keyboard (Shift+Arrow) anchor/lead, even
+        // when it lands on the same set — so the next Shift+Arrow re-pins from the
+        // marquee rather than the stale keyboard anchor. These are @ObservationIgnored,
+        // so resetting them doesn't re-render.
         selectionAnchorID = nil
         selectionLeadID = nil
-        if !selectedBlockIDs.isEmpty { focusedBlockID = nil }
+        if !newSelection.isEmpty, focusedBlockID != nil { focusedBlockID = nil }
+        // Marquee drag calls this on every mouse-move; skip the observed write (and
+        // the re-render of every row) when the selected set is unchanged.
+        guard newSelection != selectedBlockIDs else { return }
+        selectedBlockIDs = newSelection
     }
 
     func clearSelection() {
@@ -497,7 +539,7 @@ final class EditorDocument {
     /// Insert a copy of `block` right after it and focus the copy.
     @discardableResult
     func duplicate(_ block: Block) -> Block {
-        let copiedTable = block.table.map { TableData(cells: $0.cells) }
+        let copiedTable = block.table.map { TableData(cells: $0.cells, alignments: $0.columnAlignments) }
         copiedTable?.hasHeaderRow = block.table?.hasHeaderRow ?? true
         copiedTable?.hasHeaderColumn = block.table?.hasHeaderColumn ?? false
         let copy = Block(

@@ -28,7 +28,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A054B0C22FF406F50010B682 /* MyaeEditor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyaeEditor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A054B0C22FF406F50010B682 /* Myae.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Myae.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A054B0D12FF406F60010B682 /* MyaeEditorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyaeEditorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A054B0DB2FF406F60010B682 /* MyaeEditorUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyaeEditorUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0C47B812FF5BBCA00FCBFE3 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
@@ -91,7 +91,7 @@
 		A054B0C32FF406F50010B682 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A054B0C22FF406F50010B682 /* MyaeEditor.app */,
+				A054B0C22FF406F50010B682 /* Myae.app */,
 				A054B0D12FF406F60010B682 /* MyaeEditorTests.xctest */,
 				A054B0DB2FF406F60010B682 /* MyaeEditorUITests.xctest */,
 			);
@@ -120,7 +120,7 @@
 			packageProductDependencies = (
 			);
 			productName = MyaeEditor;
-			productReference = A054B0C22FF406F50010B682 /* MyaeEditor.app */;
+			productReference = A054B0C22FF406F50010B682 /* Myae.app */;
 			productType = "com.apple.product-type.application";
 		};
 		A054B0D02FF406F60010B682 /* MyaeEditorTests */ = {
@@ -407,6 +407,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Myae;
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Load images referenced by your Markdown files on the Desktop.";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Load images referenced by your Markdown files in Documents.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Load images referenced by your Markdown files in Downloads.";
@@ -442,6 +443,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Myae;
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Load images referenced by your Markdown files on the Desktop.";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Load images referenced by your Markdown files in Documents.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Load images referenced by your Markdown files in Downloads.";

@@ -11,6 +11,9 @@
 
 import SwiftUI
 
+/// Identifies a cell for keyboard-focus tracking (drives the active-cell ring).
+struct TableCellID: Hashable { let r: Int; let c: Int }
+
 struct TableBlockView: View {
     @Bindable var document: EditorDocument
     @Bindable var block: Block
@@ -18,10 +21,11 @@ struct TableBlockView: View {
     @State private var hovering = false
     @State private var hoveredRow: Int?
     @State private var hoveredColumn: Int?
+    @FocusState private var focusedCell: TableCellID?
 
     private let rowMinHeight: CGFloat = 32
     private let borderWidth: CGFloat = 0.5
-    private let handleInset: CGFloat = 20   // how far the row handle floats into the left gutter
+    private let handleInset: CGFloat = 14   // how far the row handle floats into the left gutter
 
     /// Run a structural table change and signal the document for autosave.
     private func edit(_ change: () -> Void) { change(); document.markEdited() }
@@ -62,6 +66,9 @@ struct TableBlockView: View {
                     rowHandle(r, table: table)
                         .offset(x: -handleInset)
                         .opacity(hoveredRow == r ? 1 : 0)
+                        // Keep the handle alive while the pointer is on it, so it
+                        // doesn't fade out from under the cursor as you reach for it.
+                        .onHover { if $0 { hoveredRow = r } }
                 }
             }
         }
@@ -84,7 +91,14 @@ struct TableBlockView: View {
                     Button("Insert column left") { edit { table.insertColumn(at: c) } }
                     Button("Insert column right") { edit { table.insertColumn(at: c + 1) } }
                     Divider()
+                    Menu("Align") {
+                        alignButton("Left", .left, "text.alignleft", table, c)
+                        alignButton("Center", .center, "text.aligncenter", table, c)
+                        alignButton("Right", .right, "text.alignright", table, c)
+                    }
+                    Divider()
                     Button("Delete column", role: .destructive) { edit { table.deleteColumn(at: c) } }
+                    Button("Delete table", role: .destructive) { document.removeBlock(block) }
                 } label: {
                     ZStack {
                         RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.15))
@@ -99,11 +113,23 @@ struct TableBlockView: View {
                 .menuIndicator(.hidden)
                 .frame(maxWidth: .infinity)
                 .opacity(hoveredColumn == c ? 1 : 0)
+                .onHover { if $0 { hoveredColumn = c } }
                 .help("Column options")
             }
         }
         .frame(height: 12)
         .offset(y: -14)
+    }
+
+    /// One entry in the column "Align" submenu; toggles the alignment off if it's
+    /// already the current one, and marks the active choice with a check.
+    private func alignButton(_ title: String, _ a: ColumnAlignment, _ symbol: String,
+                             _ table: TableData, _ c: Int) -> some View {
+        Button {
+            edit { table.setAlignment(table.alignment(c) == a ? .none : a, column: c) }
+        } label: {
+            Label(table.alignment(c) == a ? "\(title) ✓" : title, systemImage: symbol)
+        }
     }
 
     private func rowHandle(_ r: Int, table: TableData) -> some View {
@@ -112,6 +138,7 @@ struct TableBlockView: View {
             Button("Insert row below") { edit { table.insertRow(at: r + 1) } }
             Divider()
             Button("Delete row", role: .destructive) { edit { table.deleteRow(at: r) } }
+            Button("Delete table", role: .destructive) { document.removeBlock(block) }
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.15))
@@ -141,10 +168,13 @@ struct TableBlockView: View {
             text: text,
             r: r, c: c,
             isHeader: isHeader,
+            isFocused: focusedCell == TableCellID(r: r, c: c),
+            alignment: table.alignment(c),
             isLastRow: r == table.rowCount - 1,
             isLastCol: c == table.columnCount - 1,
             minHeight: rowMinHeight,
             borderWidth: borderWidth,
+            focus: $focusedCell,
             setText: { new in
                 if table.cells.indices.contains(r), table.cells[r].indices.contains(c) {
                     table.cells[r][c] = new
@@ -217,10 +247,13 @@ struct TableCellView: View, Equatable {
     let r: Int
     let c: Int
     let isHeader: Bool
+    let isFocused: Bool
+    let alignment: ColumnAlignment
     let isLastRow: Bool
     let isLastCol: Bool
     let minHeight: CGFloat
     let borderWidth: CGFloat
+    var focus: FocusState<TableCellID?>.Binding
     let setText: (String) -> Void
     let onHover: (Bool) -> Void
     let menu: TableCellMenu
@@ -229,6 +262,8 @@ struct TableCellView: View, Equatable {
         lhs.text == rhs.text &&
         lhs.r == rhs.r && lhs.c == rhs.c &&
         lhs.isHeader == rhs.isHeader &&
+        lhs.isFocused == rhs.isFocused &&
+        lhs.alignment == rhs.alignment &&
         lhs.isLastRow == rhs.isLastRow && lhs.isLastCol == rhs.isLastCol &&
         lhs.minHeight == rhs.minHeight && lhs.borderWidth == rhs.borderWidth
     }
@@ -237,16 +272,27 @@ struct TableCellView: View, Equatable {
         Binding(get: { text }, set: { setText($0) })
     }
 
+    private var frameAlignment: Alignment {
+        switch alignment {
+        case .right:  return .topTrailing
+        case .center: return .top
+        default:      return .topLeading
+        }
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             if isHeader {
-                Color.secondary.opacity(0.06)
+                Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.5)
             }
             TextField("", text: binding, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 14, weight: isHeader ? .semibold : .regular))
+                .multilineTextAlignment(alignment.textAlignment)
+                .frame(maxWidth: .infinity, alignment: frameAlignment)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 7)
+                .focused(focus, equals: TableCellID(r: r, c: c))
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         // maxHeight lets every cell stretch to the tallest cell in its row so the
@@ -255,6 +301,12 @@ struct TableCellView: View, Equatable {
         // so long text is not clipped.
         .frame(minHeight: minHeight, maxHeight: .infinity, alignment: .topLeading)
         .overlay(dividers)
+        // Accent ring on the active cell so you can see where focus is in a big grid.
+        .overlay {
+            if isFocused {
+                Rectangle().stroke(Color.accentColor, lineWidth: 2).padding(borderWidth)
+            }
+        }
         .onHover(perform: onHover)
         .contextMenu {
             Button("Insert row above") { menu.insertRowAbove() }

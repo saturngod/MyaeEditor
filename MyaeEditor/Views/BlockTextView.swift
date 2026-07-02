@@ -52,7 +52,9 @@ struct BlockTextView: NSViewRepresentable {
     var onExtendSelectionDown: () -> Bool = { false }
     var onTab: () -> Bool
     var onShiftTab: () -> Bool
-    var onSlash: () -> Void
+    /// A "/" was just typed. The argument is its character index, so the row
+    /// can anchor the slash command there.
+    var onSlash: (Int) -> Void
     var onFocused: () -> Void
     /// Cmd+A pressed while the block's text is already fully selected (or empty):
     /// escalate to selecting all blocks.
@@ -121,6 +123,11 @@ struct BlockTextView: NSViewRepresentable {
         let kindChanged = context.coordinator.lastKind != kind
         context.coordinator.lastKind = kind
         if textChanged || kindChanged { tv.needsDisplay = true }
+        // A kind change swaps the base font, so the line height (and an empty
+        // block's height) changes even when the text is byte-identical — e.g.
+        // Backspace demoting an empty heading to a paragraph. Re-measure, since
+        // `layout()` only re-measures on a width change.
+        if kindChanged { tv.invalidateIntrinsicContentSize() }
 
         // Highlight code blocks after any external text sync or language change.
         // (The text binding may still hold the un-colored string, so re-applying
@@ -172,7 +179,14 @@ struct BlockTextView: NSViewRepresentable {
         }
     }
 
+    /// Cache of the per-kind typing attributes. These are constant per kind, but
+    /// `updateNSView` reassigns them on every SwiftUI pass (once per visible block
+    /// on any focus/selection change), so rebuilding the paragraph style + dict
+    /// each time is wasted work. Main-thread only, matching the text editing path.
+    private static var typingAttributesCache: [BlockKind: [NSAttributedString.Key: Any]] = [:]
+
     static func typingAttributes(for kind: BlockKind) -> [NSAttributedString.Key: Any] {
+        if let cached = typingAttributesCache[kind] { return cached }
         let para = NSMutableParagraphStyle()
         switch kind {
         case .heading1:
@@ -204,11 +218,13 @@ struct BlockTextView: NSViewRepresentable {
         }
         var color: NSColor = .textColor
         if kind == .quote { color = .secondaryLabelColor }
-        return [
+        let attrs: [NSAttributedString.Key: Any] = [
             .font: kind.baseFont,
             .foregroundColor: color,
             .paragraphStyle: para,
         ]
+        typingAttributesCache[kind] = attrs
+        return attrs
     }
 
     // MARK: - Coordinator
@@ -221,7 +237,23 @@ struct BlockTextView: NSViewRepresentable {
         fileprivate var pendingFocusWork: DispatchWorkItem?
         /// Guards re-entrancy while the inline-code transform edits the storage.
         private var applyingInlineCode = false
+        /// True only while the pending edit inserts a "/", so the slash menu
+        /// opens on a keystroke — not when a deletion leaves a "/" before the
+        /// caret (e.g. erasing "hello" from "/hello" back down to "/").
+        private var typedSlash = false
         init(_ parent: BlockTextView) { self.parent = parent }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            // Ignore our own programmatic edits (e.g. the inline-code transform),
+            // which also route through this delegate. hasSuffix (rather than ==)
+            // so a "/" ending a short IME composition commit still opens the menu,
+            // but bound the length so pasting a URL that ends in "/" does not.
+            if !applyingInlineCode {
+                typedSlash = (replacementString?.hasSuffix("/") ?? false)
+                    && (replacementString?.count ?? 0) <= 2
+            }
+            return true
+        }
 
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? AutoSizingTextView else { return }
@@ -245,10 +277,11 @@ struct BlockTextView: NSViewRepresentable {
             // mid-line (e.g. "Hello/") so inline math can be inserted anywhere.
             let sel = tv.selectedRange()
             let ns = tv.string as NSString
-            if parent.kind != .code, sel.length == 0, sel.location > 0, sel.location <= ns.length,
+            if typedSlash, parent.kind != .code, sel.length == 0, sel.location > 0, sel.location <= ns.length,
                ns.substring(with: NSRange(location: sel.location - 1, length: 1)) == "/" {
-                parent.onSlash()
+                parent.onSlash(sel.location - 1)
             }
+            typedSlash = false
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -279,16 +312,19 @@ struct BlockTextView: NSViewRepresentable {
 
             let content = ns.substring(with: NSRange(location: openIdx + 1, length: closeIdx - openIdx - 1))
             let fullSpan = NSRange(location: openIdx, length: closeIdx - openIdx + 1)
+            // Hold the guard across shouldChangeText/didChangeText too, so the
+            // delegate doesn't mistake this programmatic replacement for a typed
+            // "/" (which would spuriously open the slash menu for "`/`").
+            applyingInlineCode = true
+            defer { applyingInlineCode = false }
             guard tv.shouldChangeText(in: fullSpan, replacementString: content) else { return }
 
             let color: NSColor = parent.kind == .quote ? .secondaryLabelColor : .textColor
             let size = (tv.font ?? NSFont.systemFont(ofSize: 16)).pointSize
             let styled = NSAttributedString(string: content,
                                             attributes: InlineCode.attributes(size: size, color: color))
-            applyingInlineCode = true
             storage.replaceCharacters(in: fullSpan, with: styled)
             tv.didChangeText()
-            applyingInlineCode = false
             tv.setSelectedRange(NSRange(location: openIdx + styled.length, length: 0))
             // Stop the code styling from continuing as the user keeps typing.
             tv.typingAttributes = BlockTextView.typingAttributes(for: parent.kind)
@@ -432,9 +468,18 @@ final class AutoSizingTextView: NSTextView {
         invalidateIntrinsicContentSize()
     }
 
+    /// Width at the last intrinsic-size invalidation. Height depends only on the
+    /// wrapping width, so re-measuring when the width is unchanged just triggers
+    /// another layout for the same answer — invalidate only when the width moves.
+    private var lastLaidOutWidth: CGFloat = -1
+
     override func layout() {
         super.layout()
-        invalidateIntrinsicContentSize()
+        let width = bounds.width
+        if width != lastLaidOutWidth {
+            lastLaidOutWidth = width
+            invalidateIntrinsicContentSize()
+        }
     }
 
     func caretIsOnFirstLine() -> Bool {

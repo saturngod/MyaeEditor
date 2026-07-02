@@ -233,13 +233,27 @@ struct BlockRowView: View {
     /// than dependent on the SF Symbol's implicit rendered size.
     private let checkboxSize: CGFloat = 16
 
+    /// Memo for `typographic`, keyed by font name+size and the probe text. Marker
+    /// alignment measures the same few (font, probe) pairs on every row render, and
+    /// a focus/selection change re-renders every visible row — so caching turns the
+    /// repeated CTLine builds into dictionary lookups. Main-thread only.
+    private struct TypographicKey: Hashable { let font: String; let size: CGFloat; let text: String }
+    private static var typographicCache: [TypographicKey: (ascent: CGFloat, height: CGFloat)] = [:]
+
     /// Typographic ascent + full height of `text` in `font`, via CoreText.
     private func typographic(_ font: NSFont, _ text: String) -> (ascent: CGFloat, height: CGFloat) {
+        let key = TypographicKey(font: font.fontName, size: font.pointSize, text: text)
+        if let cached = Self.typographicCache[key] { return cached }
         let line = CTLineCreateWithAttributedString(
             NSAttributedString(string: text, attributes: [.font: font]))
         var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
         CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
-        return (ascent, ascent + descent + leading)
+        let result = (ascent, ascent + descent + leading)
+        // The probe text varies with content (a line's first 20 chars), so bound
+        // the cache; clearing wholesale is fine — it just re-measures on demand.
+        if Self.typographicCache.count > 256 { Self.typographicCache.removeAll(keepingCapacity: true) }
+        Self.typographicCache[key] = result
+        return result
     }
 
     /// Distance from the top of the text view down to the first line's baseline.
