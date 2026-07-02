@@ -33,6 +33,10 @@ struct BlockRowView: View {
     @State private var showBlockMenu = false
     @State private var showSlashMenu = false
     @State private var slashQuery = ""
+    /// Character index of the "/" that opened the menu, so the query and the
+    /// removal target that exact command — not the last "/" in the block (which
+    /// may be leftover text the user kept by pressing Esc).
+    @State private var slashStart: Int?
     @State private var justCopied = false
 
     // Inline math editing.
@@ -54,6 +58,7 @@ struct BlockRowView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 4) {
             controls
+                .padding(.top, controlsTop)
                 .opacity(hovering || draggingID == block.id ? 1 : 0)
                 .animation(.easeInOut(duration: 0.15), value: hovering)
             content
@@ -137,7 +142,13 @@ struct BlockRowView: View {
     private var content: some View {
         switch block.kind {
         case .divider:
-            Divider().padding(.vertical, 6)
+            // An explicit horizontal rule: a bare Divider() inside the row's
+            // HStack would infer a vertical orientation and render as "|".
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor))
+                .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
+                .padding(.vertical, 6)
+                .layoutPriority(1)   // span the row width instead of yielding to the trailing spacer
         case .table:
             TableBlockView(document: document, block: block)
                 .padding(.vertical, 4)
@@ -245,6 +256,15 @@ struct BlockRowView: View {
         max(0, textBaseline - typographic(font, glyph).height)
     }
 
+    /// Top padding that drops the hover controls so their center lands on the
+    /// first line's visual middle. The controls sit in a fixed 24pt-tall box
+    /// pinned to the row top; for tall lines (H1/H2) that leaves the "+" near the
+    /// top of the line instead of centered, so nudge it down to match the text.
+    private var controlsTop: CGFloat {
+        let lineCenter = textBaseline - block.kind.baseFont.capHeight / 2
+        return max(0, lineCenter - 12)   // 12 = half the controls' 24pt height
+    }
+
     @ViewBuilder
     private var leadingDecoration: some View {
         switch block.kind {
@@ -299,7 +319,7 @@ struct BlockRowView: View {
             onExtendSelectionDown: { document.extendBlockSelection(up: false, from: block.id); return true },
             onTab: { document.indent(block); return true },          // always consume Tab
             onShiftTab: { document.outdent(block); return true },     // always consume Shift-Tab
-            onSlash: { showSlashMenu = true; slashQuery = "" },
+            onSlash: { loc in showSlashMenu = true; slashQuery = ""; slashStart = loc },
             onFocused: {
                 document.clearSelection()   // editing a block ends any block selection
                 if document.focusedBlockID != block.id { document.focusedBlockID = block.id }
@@ -326,8 +346,10 @@ struct BlockRowView: View {
             SlashMenu(query: $slashQuery) { kind in
                 selectSlashKind(kind)
             } onDismiss: {
+                // Esc just closes the menu; leave the typed "/" (and any query)
+                // in place so the user can keep editing it.
                 showSlashMenu = false
-                removeSlashCommand()
+                slashStart = nil
                 document.focusedBlockID = block.id
             }
         }
@@ -413,25 +435,30 @@ struct BlockRowView: View {
         return true
     }
 
-    /// While the slash menu is open, the text after the last "/" drives the menu
-    /// filter — works even if the popover's search field never grabs focus, and
-    /// mid-line (e.g. "Hello/math"). If the "/" is gone, close the menu.
-    private func syncSlashMenuQuery() {
-        let s = block.plainText
-        if let r = s.range(of: "/", options: .backwards) {
-            slashQuery = String(s[r.upperBound...])
-        } else {
-            showSlashMenu = false
-        }
+    /// The "/command" range anchored at `slashStart`: the "/" plus everything up
+    /// to the next "/" (or end). Returns nil if the recorded "/" is gone (user
+    /// deleted or edited past it), which means the menu should close.
+    private func slashCommandRange() -> NSRange? {
+        guard let start = slashStart else { return nil }
+        let ns = block.plainText as NSString
+        guard start >= 0, start < ns.length, ns.character(at: start) == 47 else { return nil }  // 47 = "/"
+        var end = start + 1
+        while end < ns.length, ns.character(at: end) != 47 { end += 1 }
+        return NSRange(location: start, length: end - start)
     }
 
-    /// Delete the "/query" (from the last "/" to the end) the user typed to open
-    /// the menu, leaving any preceding text intact.
-    private func removeSlashCommand() {
+    /// While the slash menu is open, the text after the anchored "/" drives the
+    /// menu filter. If that "/" is gone, close the menu.
+    private func syncSlashMenuQuery() {
+        guard let r = slashCommandRange() else { showSlashMenu = false; return }
         let ns = block.plainText as NSString
-        let r = ns.range(of: "/", options: .backwards)
-        guard r.location != NSNotFound else { return }
-        let del = NSRange(location: r.location, length: ns.length - r.location)
+        slashQuery = ns.substring(with: NSRange(location: r.location + 1, length: r.length - 1))
+    }
+
+    /// Delete the "/query" the user typed to open the menu (anchored at
+    /// `slashStart`, up to the next "/"), leaving surrounding text intact.
+    private func removeSlashCommand() {
+        guard let del = slashCommandRange() else { return }
         let m = NSMutableAttributedString(attributedString: block.text)
         m.deleteCharacters(in: del)
         block.text = m
@@ -440,6 +467,7 @@ struct BlockRowView: View {
     private func selectSlashKind(_ kind: BlockKind) {
         showSlashMenu = false
         removeSlashCommand()
+        slashStart = nil
         switch kind {
         case .inlineMath:
             mathEditRange = nil
