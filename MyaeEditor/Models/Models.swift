@@ -457,6 +457,87 @@ final class EditorDocument {
         return new
     }
 
+    /// Insert `newBlocks` at `index` (clamped). No focus changes — callers decide.
+    @discardableResult
+    func insertBlocks(_ newBlocks: [Block], at index: Int) -> [Block] {
+        guard !newBlocks.isEmpty else { return [] }
+        blocks.insert(contentsOf: newBlocks, at: max(0, min(index, blocks.count)))
+        markEdited()
+        return newBlocks
+    }
+
+    /// Paste decoded blocks into `block` at a caret split. `textBefore`/`textAfter`
+    /// are the text around the caret (any selection already excluded by the caller).
+    /// Used when the pasted markdown decodes to multiple blocks or a single
+    /// non-paragraph block. NOT undoable — parity with every structural mutation.
+    func paste(_ pasted: [Block], into block: Block,
+               textBefore: NSAttributedString, textAfter: NSAttributedString) {
+        guard let idx = index(of: block), !pasted.isEmpty else { return }
+        var toInsert = pasted
+        let insertAt: Int
+        var trailing: Block?
+
+        if block.isEmpty && block.kind == .paragraph {
+            // Empty paragraph host: replace it in place (no stray blank line).
+            blocks.remove(at: idx)
+            insertAt = idx
+        } else if textBefore.length == 0 {
+            // Caret at start: pasted blocks land above; host keeps the remainder.
+            block.text = textAfter
+            insertAt = idx
+        } else {
+            // Caret mid/at-end: host keeps the before-text. If the first pasted
+            // block is a paragraph, merge it inline into the host (Notion-style).
+            if toInsert[0].kind == .paragraph {
+                let merged = NSMutableAttributedString(attributedString: textBefore)
+                merged.append(toInsert[0].text.restyled(to: block.kind))
+                block.text = merged
+                toInsert.removeFirst()
+            } else {
+                block.text = textBefore
+            }
+            insertAt = idx + 1
+            if textAfter.length > 0 {
+                trailing = Block(kind: block.kind, text: textAfter, checked: block.checked,
+                                 depth: block.depth, language: block.language)
+            }
+        }
+
+        var run = toInsert
+        if let trailing { run.append(trailing) }
+        insertBlocks(run, at: insertAt)
+
+        // Caret: end of the last inserted block if it's textual; otherwise
+        // (table/divider/image/equation) block-select it — it has no text view.
+        if let last = run.last {
+            if last.kind.isTextual {
+                focusedBlockID = last.id
+                focusAtStart = false
+                pendingCaretLocation = (last.id, last.text.length)
+                selectedBlockIDs = []
+            } else {
+                focusedBlockID = nil
+                pendingCaretLocation = nil
+                selectedBlockIDs = [last.id]
+            }
+        }
+        markEdited()
+    }
+
+    /// Replace the block-level selection with `newBlocks` (paste over a block
+    /// selection); the pasted blocks become the new selection.
+    func replaceSelectedBlocks(with newBlocks: [Block]) {
+        guard !selectedBlockIDs.isEmpty, !newBlocks.isEmpty else { return }
+        let firstIdx = blocks.firstIndex { selectedBlockIDs.contains($0.id) } ?? 0
+        blocks.removeAll { selectedBlockIDs.contains($0.id) }
+        blocks.insert(contentsOf: newBlocks, at: min(firstIdx, blocks.count))
+        selectedBlockIDs = Set(newBlocks.map(\.id))
+        selectionAnchorID = nil
+        selectionLeadID = nil
+        focusedBlockID = nil
+        markEdited()
+    }
+
     /// Delete `block`, focusing the previous one (caret at end). No-op if it's the only block.
     func deleteAndFocusPrevious(_ block: Block) {
         guard blocks.count > 1, let i = index(of: block) else {

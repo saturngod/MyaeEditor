@@ -350,6 +350,10 @@ struct BlockRowView: View {
             onExtendSelectionDown: { document.extendBlockSelection(up: false, from: block.id); return true },
             onTab: { document.indent(block); return true },          // always consume Tab
             onShiftTab: { document.outdent(block); return true },     // always consume Shift-Tab
+            onPasteBlocks: { pasted, before, after in
+                showSlashMenu = false; slashStart = nil   // block surgery invalidates any open slash query
+                document.paste(pasted, into: block, textBefore: before, textAfter: after)
+            },
             onSlash: { loc in showSlashMenu = true; slashQuery = ""; slashStart = loc },
             onFocused: {
                 document.clearSelection()   // editing a block ends any block selection

@@ -202,6 +202,16 @@ enum MarkdownCodec {
     private static let imageLineRegex = try? NSRegularExpression(pattern: #"^!\[[^\]]*\]\((.+)\)$"#)
     private static let numberedPrefixRegex = try? NSRegularExpression(pattern: #"^\d+\.\s"#)
 
+    /// Decode pasteboard text into blocks. Normalizes CRLF/CR to LF and strips
+    /// trailing newlines (browser/terminal copies commonly append them; they'd
+    /// otherwise decode into trailing empty paragraphs).
+    static func decodeForPaste(_ raw: String) -> [Block] {
+        var s = raw.replacingOccurrences(of: "\r\n", with: "\n")
+                   .replacingOccurrences(of: "\r", with: "\n")
+        while s.hasSuffix("\n") { s.removeLast() }
+        return decode(s)
+    }
+
     static func decode(_ markdown: String) -> [Block] {
         var blocks: [Block] = []
         let lines = markdown.components(separatedBy: "\n")

@@ -27,6 +27,45 @@ enum InlineCode {
     }
 }
 
+extension NSAttributedString {
+    /// Re-target this text to `kind`'s base font, preserving bold/italic traits,
+    /// strikethrough, inline-code runs (kept monospaced at the new point size),
+    /// and inline-math attachments. Applies the kind's foreground color and
+    /// paragraph style. Used when pasting a paragraph into a block of another
+    /// kind (`parseInline` produces paragraph-styled text with no paragraph
+    /// style attribute, which would otherwise render with inconsistent spacing).
+    func restyled(to kind: BlockKind) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: self)
+        let full = NSRange(location: 0, length: mutable.length)
+        let base = kind.baseFont
+        let color: NSColor = (kind == .quote) ? .secondaryLabelColor : .textColor
+        mutable.enumerateAttributes(in: full) { attrs, range, _ in
+            // Inline-code runs keep the monospaced font at the new point size.
+            if (attrs[.inlineCode] as? Bool) == true {
+                mutable.addAttribute(.font, value: InlineCode.font(size: base.pointSize), range: range)
+                mutable.addAttribute(.foregroundColor, value: color, range: range)
+                return
+            }
+            // Inline-math attachments carry their own rendering; leave untouched.
+            if attrs[.attachment] is MathAttachment { return }
+            let traits = (attrs[.font] as? NSFont).map { NSFontManager.shared.traits(of: $0) } ?? []
+            var newFont = base
+            if traits.contains(.boldFontMask) {
+                newFont = NSFontManager.shared.convert(newFont, toHaveTrait: .boldFontMask)
+            }
+            if traits.contains(.italicFontMask) {
+                newFont = NSFontManager.shared.convert(newFont, toHaveTrait: .italicFontMask)
+            }
+            mutable.addAttribute(.font, value: newFont, range: range)
+            mutable.addAttribute(.foregroundColor, value: color, range: range)
+        }
+        if let para = BlockTextView.typingAttributes(for: kind)[.paragraphStyle] {
+            mutable.addAttribute(.paragraphStyle, value: para, range: full)
+        }
+        return mutable
+    }
+}
+
 struct BlockTextView: NSViewRepresentable {
     @Binding var text: NSAttributedString
     let kind: BlockKind
@@ -52,6 +91,10 @@ struct BlockTextView: NSViewRepresentable {
     var onExtendSelectionDown: () -> Bool = { false }
     var onTab: () -> Bool
     var onShiftTab: () -> Bool
+    /// Pasted markdown decoded to multiple blocks (or one non-paragraph block):
+    /// the row splits the current block and inserts them. Args: pasted blocks,
+    /// text before the caret, text after the caret.
+    var onPasteBlocks: (_ pasted: [Block], _ before: NSAttributedString, _ after: NSAttributedString) -> Void = { _, _, _ in }
     /// A "/" was just typed. The argument is its character index, so the row
     /// can anchor the slash command there.
     var onSlash: (Int) -> Void
@@ -241,7 +284,13 @@ struct BlockTextView: NSViewRepresentable {
         /// opens on a keystroke — not when a deletion leaves a "/" before the
         /// caret (e.g. erasing "hello" from "/hello" back down to "/").
         private var typedSlash = false
+        /// True while a paste is inserting text, so the slash heuristic is skipped
+        /// (a pasted string ending in "/" must not open the slash menu).
+        private var isPasting = false
         init(_ parent: BlockTextView) { self.parent = parent }
+
+        func beginPaste() { isPasting = true }
+        func endPaste() { isPasting = false }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
             // Ignore our own programmatic edits (e.g. the inline-code transform),
@@ -249,8 +298,12 @@ struct BlockTextView: NSViewRepresentable {
             // so a "/" ending a short IME composition commit still opens the menu,
             // but bound the length so pasting a URL that ends in "/" does not.
             if !applyingInlineCode {
-                typedSlash = (replacementString?.hasSuffix("/") ?? false)
-                    && (replacementString?.count ?? 0) <= 2
+                if isPasting {
+                    typedSlash = false
+                } else {
+                    typedSlash = (replacementString?.hasSuffix("/") ?? false)
+                        && (replacementString?.count ?? 0) <= 2
+                }
             }
             return true
         }
@@ -638,10 +691,62 @@ final class AutoSizingTextView: NSTextView {
         return ok
     }
 
+    // MARK: Paste (markdown-aware)
+
+    /// Cmd+V / Edit ▸ Paste. Reads ONLY the plain-string flavor (the editor has no
+    /// color/font model, and markdown round-trips every block kind). Inside a code
+    /// block paste is always literal. Markdown that decodes to a single paragraph
+    /// is inserted inline at the caret; anything structural (multiple blocks or a
+    /// single table/code/quote/heading/list/divider) splits the block and hands the
+    /// surgery to the row via `onPasteBlocks`.
+    override func paste(_ sender: Any?) {
+        guard let parent = coordinator?.parent else { return }
+        if parent.kind == .code { pasteLiteral(); return }
+        guard let raw = NSPasteboard.general.string(forType: .string) else { return }
+        let pasted = MarkdownCodec.decodeForPaste(raw)
+        if pasted.count == 1, pasted[0].kind == .paragraph {
+            insertPasted(pasted[0].text.restyled(to: parent.kind))
+            return
+        }
+        guard let storage = textStorage else { return }
+        let sel = selectedRange()
+        let before = storage.attributedSubstring(from: NSRange(location: 0, length: sel.location))
+        let afterLoc = sel.location + sel.length
+        let after = storage.attributedSubstring(
+            from: NSRange(location: afterLoc, length: storage.length - afterLoc))
+        parent.onPasteBlocks(pasted, before, after)
+    }
+
+    /// Cmd+Shift+V, "Paste and Match Style", and every paste inside a code block:
+    /// the pasteboard string inserted verbatim (newlines normalized), no parsing.
+    func pasteLiteral() {
+        guard let raw = NSPasteboard.general.string(forType: .string) else { return }
+        let s = raw.replacingOccurrences(of: "\r\n", with: "\n")
+                   .replacingOccurrences(of: "\r", with: "\n")
+        insertPasted(NSAttributedString(string: s, attributes: typingAttributes))
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) { pasteLiteral() }
+
+    /// Insert pasted text at the caret/selection through `insertText`, so NSTextView
+    /// undo works and the block's typing attributes apply, with the slash-menu
+    /// heuristic suppressed for the duration.
+    private func insertPasted(_ attr: NSAttributedString) {
+        coordinator?.beginPaste()
+        defer { coordinator?.endPaste() }
+        insertText(attr, replacementRange: selectedRange())
+    }
+
     // MARK: Inline formatting (bold / italic / strikethrough over the selection)
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Cmd+Shift+V: paste as plain literal text (no markdown parsing). Handled
+        // here — not gated on a selection — so it works with a collapsed caret too.
+        if mods == [.command, .shift], event.charactersIgnoringModifiers?.lowercased() == "v" {
+            pasteLiteral()
+            return true
+        }
         if selectedRange().length > 0, let chars = event.charactersIgnoringModifiers?.lowercased() {
             if mods == .command {
                 switch chars {

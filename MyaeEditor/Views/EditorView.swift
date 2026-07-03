@@ -370,7 +370,7 @@ struct EditorView: View {
         }
         // Key codes are physical (layout-independent), so Cmd+A works on any
         // keyboard layout — unlike matching charactersIgnoringModifiers.
-        let A: UInt16 = 0, C: UInt16 = 8, X: UInt16 = 7
+        let A: UInt16 = 0, C: UInt16 = 8, X: UInt16 = 7, V: UInt16 = 9
         let up: UInt16 = 126, down: UInt16 = 125
         let box = windowBox
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak document] event in
@@ -408,6 +408,14 @@ struct EditorView: View {
             if cmd, event.keyCode == A { doc.selectAllBlocks(); return nil }
             if cmd, event.keyCode == C { copy(doc); return nil }
             if cmd, event.keyCode == X { copy(doc); doc.deleteSelectedBlocks(); return nil }
+            // Paste over a block selection replaces it (Shift not distinguished —
+            // literal vs parsed is meaningless when replacing whole blocks).
+            if cmd, event.keyCode == V {
+                if let raw = NSPasteboard.general.string(forType: .string) {
+                    doc.replaceSelectedBlocks(with: MarkdownCodec.decodeForPaste(raw))
+                }
+                return nil
+            }
 
             // A bare keypress (no Cmd, no Shift) collapses the selection; Shift is
             // spared so an unhandled Shift+Arrow doesn't silently wipe it.
