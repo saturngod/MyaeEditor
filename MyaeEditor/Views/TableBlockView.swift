@@ -2,11 +2,13 @@
 //  TableBlockView.swift
 //  MyaeEditor
 //
-//  An editable table. Columns share the editor width equally.
-//  Row/column option handles float in the gutter on hover (they don't take
-//  layout space, so the grid left-aligns with the surrounding text). The "+"
-//  bars add a row (bottom) or column (right). Cells also have a right-click
-//  context menu.
+//  An editable table. Columns share the editor width equally while they fit;
+//  once the table needs more than the editor width (many columns), each column
+//  holds a minimum width and the grid scrolls horizontally (Notion-style).
+//  Row option handles are pinned in the left gutter of the scroll viewport so
+//  they stay visible while scrolled; column handles scroll with their columns.
+//  The "+" bars add a row (bottom) or column (right, pinned to the viewport
+//  edge). Cells also have a right-click context menu.
 //
 
 import SwiftUI
@@ -22,10 +24,27 @@ struct TableBlockView: View {
     @State private var hoveredRow: Int?
     @State private var hoveredColumn: Int?
     @FocusState private var focusedCell: TableCellID?
+    /// Width available to the grid (the horizontal scroll viewport width).
+    @State private var availableWidth: CGFloat = 0
+    /// Each row's frame (in the table coordinate space) so the pinned row
+    /// handles can float in the gutter at the right vertical offset even though
+    /// they live outside the scroll content. x/width are zeroed so horizontal
+    /// scrolling doesn't churn this state.
+    @State private var rowFrames: [Int: CGRect] = [:]
 
     private let rowMinHeight: CGFloat = 32
     private let borderWidth: CGFloat = 0.5
     private let handleInset: CGFloat = 14   // how far the row handle floats into the left gutter
+    private let minColumnWidth: CGFloat = 120  // below this, the table scrolls instead of shrinking
+    private let topBleed: CGFloat = 16      // vertical room the clip leaves for column handles above the grid
+    private let rowHandleHeight: CGFloat = 22
+
+    /// Width to propose to the grid: fill the viewport when the columns fit,
+    /// otherwise hold every column at `minColumnWidth` and let the grid overflow
+    /// (the horizontal ScrollView then scrolls).
+    private func contentWidth(_ table: TableData) -> CGFloat {
+        max(availableWidth, minColumnWidth * CGFloat(table.columnCount))
+    }
 
     /// Run a structural table change and signal the document for autosave.
     private func edit(_ change: () -> Void) { change(); document.markEdited() }
@@ -34,7 +53,7 @@ struct TableBlockView: View {
         if let table = block.table {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 4) {
-                    tableGrid(table)
+                    scrollableGrid(table)
                     addColumnButton(table).opacity(hovering ? 1 : 0)
                 }
                 addRowButton(table).opacity(hovering ? 1 : 0)
@@ -49,6 +68,38 @@ struct TableBlockView: View {
 
     // MARK: Table grid (single outer border + internal lines)
 
+    /// The grid wrapped in a horizontal ScrollView. The scroll view is always
+    /// present (not conditional on overflow) so the table keeps a stable view
+    /// identity when columns are added/removed or the window resizes — otherwise
+    /// crossing the fit/overflow threshold would drop the focused cell's editor.
+    private func scrollableGrid(_ table: TableData) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                tableGrid(table)
+                    .frame(width: contentWidth(table))
+            }
+            // Don't rubber-band horizontally when the table already fits.
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            // Disable the default clip, then re-clip so column handles above the
+            // grid aren't cut off while cell content is still clipped at the
+            // viewport edges.
+            .scrollClipDisabled()
+            .clipShape(TopBleedClip(bleed: topBleed))
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { availableWidth = $0 }
+            .coordinateSpace(name: "tableSpace")
+            // Row handles are pinned to the viewport's left gutter (they must
+            // stay visible while the grid scrolls, so they live outside the
+            // scroll content).
+            .overlay(alignment: .topLeading) { rowHandleGutter(table) }
+            // Reveal the focused cell when Tab/click moves focus off-screen.
+            // `anchor: nil` scrolls the minimum needed, so visible cells don't move.
+            .onChange(of: focusedCell) { _, new in
+                guard let new else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(new, anchor: nil) }
+            }
+        }
+    }
+
     private func tableGrid(_ table: TableData) -> some View {
         // Lazy so only the rows near the viewport keep live TextFields — a wide
         // table no longer instantiates every cell (hundreds) at once. Equal-width
@@ -60,16 +111,13 @@ struct TableBlockView: View {
                         cell(table, r, c)
                     }
                 }
-                // Row handle floats in the left gutter; it does not take layout
-                // space, so the grid stays aligned with surrounding blocks.
-                .overlay(alignment: .leading) {
-                    rowHandle(r, table: table)
-                        .offset(x: -handleInset)
-                        .opacity(hoveredRow == r ? 1 : 0)
-                        // Keep the handle alive while the pointer is on it, so it
-                        // doesn't fade out from under the cursor as you reach for it.
-                        .onHover { if $0 { hoveredRow = r } }
-                }
+                // Publish the row's frame so the pinned gutter handle can align
+                // to it. x/width are zeroed so horizontal scrolling (which shifts
+                // minX) doesn't fire this action on every scroll tick.
+                .onGeometryChange(for: CGRect.self, of: {
+                    let f = $0.frame(in: .named("tableSpace"))
+                    return CGRect(x: 0, y: f.minY, width: 0, height: f.height)
+                }) { rowFrames[r] = $0 }
             }
         }
         .overlay(tableBorder)
@@ -132,6 +180,26 @@ struct TableBlockView: View {
         }
     }
 
+    /// The stack of row handles pinned in the left gutter of the scroll
+    /// viewport. Each handle floats at its row's vertical centre using the
+    /// measured `rowFrames`, so it stays put while the grid scrolls sideways.
+    private func rowHandleGutter(_ table: TableData) -> some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(0 ..< table.rowCount, id: \.self) { r in
+                if let f = rowFrames[r] {
+                    rowHandle(r, table: table)
+                        .offset(x: -handleInset,
+                                y: f.minY + (f.height - rowHandleHeight) / 2)
+                        .opacity(hoveredRow == r ? 1 : 0)
+                        // Keep the handle alive while the pointer is on it, so it
+                        // doesn't fade out from under the cursor as you reach for it.
+                        .onHover { if $0 { hoveredRow = r } }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private func rowHandle(_ r: Int, table: TableData) -> some View {
         Menu {
             Button("Insert row above") { edit { table.insertRow(at: r) } }
@@ -145,7 +213,7 @@ struct TableBlockView: View {
                 Image(systemName: "ellipsis").font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.secondary).rotationEffect(.degrees(90))
             }
-            .frame(width: 11, height: 22)
+            .frame(width: 11, height: rowHandleHeight)
         }
         .buttonStyle(.plain)
         .menuStyle(.borderlessButton)
@@ -193,6 +261,8 @@ struct TableBlockView: View {
             )
         )
         .equatable()
+        // Target for scroll-into-view when this cell gains focus.
+        .id(TableCellID(r: r, c: c))
     }
 
     // MARK: Add buttons
@@ -337,5 +407,16 @@ struct TableCellView: View, Equatable {
                 Color(nsColor: .separatorColor).frame(width: borderWidth)
             }
         }
+    }
+}
+
+/// A clip that matches the view's bounds but extends upward by `bleed`, so the
+/// column handles floating above the grid stay visible while the horizontal
+/// scroll still clips cell content at the left/right/bottom viewport edges.
+private struct TopBleedClip: Shape {
+    var bleed: CGFloat
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY - bleed,
+                    width: rect.width, height: rect.height + bleed))
     }
 }
