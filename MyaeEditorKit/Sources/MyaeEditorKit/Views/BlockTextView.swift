@@ -78,6 +78,11 @@ struct BlockTextView: NSViewRepresentable {
     /// Shared controller for the floating format toolbar.
     var formatBar: FormatBarController
 
+    /// Whether the text is editable (read-only viewer when false).
+    var isEditable: Bool = true
+    /// Whether the floating format bar may appear on selection.
+    var showsFormatBar: Bool = true
+
     // Callbacks. Each returns `true` if it consumed the event.
     var onEnter: () -> Bool
     var onShiftEnter: () -> Bool
@@ -125,7 +130,7 @@ struct BlockTextView: NSViewRepresentable {
         tv.delegate = context.coordinator
         tv.isRichText = true
         tv.allowsUndo = true
-        tv.isEditable = true
+        tv.isEditable = isEditable
         tv.isSelectable = true
         tv.drawsBackground = false
         tv.backgroundColor = .clear
@@ -152,6 +157,7 @@ struct BlockTextView: NSViewRepresentable {
 
     func updateNSView(_ tv: AutoSizingTextView, context: Context) {
         context.coordinator.parent = self
+        if tv.isEditable != isEditable { tv.isEditable = isEditable }
 
         // Sync text only when it differs, to avoid clobbering the caret while typing.
         let textChanged = !tv.textStorage!.isEqual(to: text)
@@ -385,6 +391,7 @@ struct BlockTextView: NSViewRepresentable {
 
         /// Show the floating format bar above a non-empty selection; hide otherwise.
         func updateFormatBar(_ tv: AutoSizingTextView) {
+            guard parent.showsFormatBar else { parent.formatBar.hide(); return }
             let range = tv.selectedRange()
             // Only for real selections in formattable text, while this view is focused.
             guard range.length > 0, parent.kind != .code,

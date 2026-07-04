@@ -1,31 +1,15 @@
 //
 //  EditorView.swift
-//  MyaeEditor
+//  MyaeEditorKit
 //
 //  The document surface: a scrolling column of blocks with drag-to-reorder.
+//  Driven by a `MyaeEditorController` (which owns the document + file I/O); this
+//  view is purely the editing UI.
 //
 
 import SwiftUI
 import AppKit
 import Combine
-import UniformTypeIdentifiers
-
-extension UTType {
-    static var markdown: UTType { UTType(filenameExtension: "md") ?? .plainText }
-}
-
-extension Notification.Name {
-    static let saveMarkdown = Notification.Name("saveMarkdown")
-    static let saveAsMarkdown = Notification.Name("saveAsMarkdown")
-    static let openMarkdown = Notification.Name("openMarkdown")
-    static let newDocument = Notification.Name("newDocument")
-}
-
-/// One-shot hand-off used when Open is invoked with no window: the App stages the
-/// chosen file here, opens a window, and the new `EditorView.init` consumes it.
-enum LaunchIntent {
-    static var pendingOpenURL: URL?
-}
 
 /// Collects each row's frame (in the editor coordinate space) so the drag
 /// gesture can figure out where to drop.
@@ -37,8 +21,13 @@ struct RowFramePreference: PreferenceKey {
 }
 
 /// A mutable reference cell for the hosting NSWindow, captured (weakly) by the
-/// key monitor so it can scope events to its own window.
-final class WindowBox { weak var window: NSWindow? }
+/// key monitor so it can scope events to its own window. Also carries the live
+/// editability flag so the long-lived monitor closure follows configuration
+/// changes instead of freezing the value captured at install time.
+final class WindowBox {
+    weak var window: NSWindow?
+    var isEditable = true
+}
 
 /// Resolves the NSWindow that hosts this SwiftUI view and reports it back.
 private struct WindowAccessor: NSViewRepresentable {
@@ -54,11 +43,11 @@ private struct WindowAccessor: NSViewRepresentable {
 }
 
 struct EditorView: View {
-    @State private var document: EditorDocument
-    @State private var lastSaved: String
-    @State private var docTitle: String
-    /// The .md file currently open (nil = unsaved default document).
-    @State private var fileURL: URL?
+    let controller: MyaeEditorController
+    let configuration: MyaeEditorConfiguration
+
+    /// The live document — owned by the controller.
+    private var document: EditorDocument { controller.document }
 
     // Gesture-based reorder state.
     @State private var rowFrames: [UUID: CGRect] = [:]
@@ -86,35 +75,9 @@ struct EditorView: View {
     /// running a cross-block text-selection drag.
     private var framesActive: Bool { draggingID != nil || marqueeStart != nil || crossDragging }
 
-    /// True once the autosaved document has been restored into the first window
-    /// of this launch. Later windows open blank instead of re-showing it.
-    private static var didRestore = false
-
-    init() {
-        if let url = LaunchIntent.pendingOpenURL {
-            // Open was invoked with no window — load the chosen file into this
-            // freshly created window.
-            LaunchIntent.pendingOpenURL = nil
-            EditorView.didRestore = true
-            DocumentStore.currentFileURL = url
-            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            _document = State(initialValue: EditorDocument(blocks: MarkdownCodec.decode(text)))
-            _lastSaved = State(initialValue: text)
-            _fileURL = State(initialValue: url)
-            _docTitle = State(initialValue: url.deletingPathExtension().lastPathComponent)
-        } else if !EditorView.didRestore, let markdown = DocumentStore.load() {
-            // First window of the launch restores the autosaved document.
-            EditorView.didRestore = true
-            _document = State(initialValue: EditorDocument(blocks: MarkdownCodec.decode(markdown)))
-            _lastSaved = State(initialValue: markdown)
-            _docTitle = State(initialValue: DocumentStore.loadTitle())
-        } else {
-            // A new window starts as a blank page.
-            EditorView.didRestore = true
-            _document = State(initialValue: EditorDocument(blocks: EditorView.blankBlocks()))
-            _lastSaved = State(initialValue: "")
-            _docTitle = State(initialValue: "")
-        }
+    init(controller: MyaeEditorController, configuration: MyaeEditorConfiguration = MyaeEditorConfiguration()) {
+        self.controller = controller
+        self.configuration = configuration
     }
 
     var body: some View {
@@ -122,6 +85,8 @@ struct EditorView: View {
         let numbers = document.numberedOrdinals()
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
+                if configuration.showsTitleField { title }
+
                 ForEach(document.blocks) { block in
                     BlockRowView(document: document,
                                  block: block,
@@ -147,6 +112,7 @@ struct EditorView: View {
                     .frame(height: 120)
                     .contentShape(Rectangle())
                     .onTapGesture {
+                        guard configuration.isEditable else { return }
                         document.clearSelection()
                         guard let last = document.blocks.last else { return }
                         // A divider renders no text view, so it can't take focus —
@@ -160,9 +126,9 @@ struct EditorView: View {
                         }
                     }
             }
-            .frame(maxWidth: 720, alignment: .leading)
-            .padding(.horizontal, 60)
-            .padding(.vertical, 40)
+            .frame(maxWidth: configuration.maxContentWidth, alignment: .leading)
+            .padding(.horizontal, configuration.horizontalPadding)
+            .padding(.vertical, configuration.verticalPadding)
             .frame(maxWidth: .infinity, alignment: .center)
             .coordinateSpace(.named(space))
             .contentShape(Rectangle())
@@ -170,130 +136,25 @@ struct EditorView: View {
             .onPreferenceChange(RowFramePreference.self) { rowFrames = $0 }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .background(WindowAccessor { windowBox.window = $0 })
-        .onAppear { installKeyMonitor(); updateWindowTitle() }
+        .background(WindowAccessor { window in
+            // Resolves asynchronously after onAppear — set the initial title here,
+            // or a window opened directly onto a file would never show its name.
+            windowBox.window = window
+            updateWindowTitle()
+        })
+        .environment(\.myaeConfiguration, configuration)
+        .onAppear { installKeyMonitor() }
         .onDisappear { removeKeyMonitor(); formatBar.hide() }
-        .onReceive(document.autosaveSignal) { _ in saveIfChanged() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            saveIfChanged(synchronous: true)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .saveMarkdown)) { _ in
-            saveNow()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .saveAsMarkdown)) { _ in
-            runSaveAsPanel()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .openMarkdown)) { note in
-            if let url = note.object as? URL { loadFile(url) }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .newDocument)) { _ in
-            newBlankDocument()
-        }
+        .onChange(of: controller.fileURL) { _, _ in updateWindowTitle() }
+        .onChange(of: configuration.isEditable) { _, editable in windowBox.isEditable = editable }
     }
 
-    /// ⌘S — save to the open file, or prompt for a location if there isn't one.
-    private func saveNow() {
-        guard let url = fileURL else { runSaveAsPanel(); return }
-        let markdown = MarkdownCodec.encode(document)
-        EditorView.performWrite(markdown, to: url, synchronous: true)
-        lastSaved = markdown
-    }
-
-    /// Load an .md file into this window. Its folder becomes the base for relative
-    /// image paths. The App presents the Open panel and hands us the URL.
-    private func loadFile(_ url: URL) {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        DocumentStore.currentFileURL = url      // set before decode so images resolve
-        fileURL = url
-        document.blocks = MarkdownCodec.decode(text)
-        document.clearSelection()
-        document.focusedBlockID = document.blocks.first?.id
-        lastSaved = text
-        updateWindowTitle()
-    }
-
-    /// Reset this window to an empty document (File ▸ New into an existing window).
-    private func newBlankDocument() {
-        DocumentStore.currentFileURL = nil
-        fileURL = nil
-        document.blocks = EditorView.blankBlocks()
-        document.clearSelection()
-        document.focusedBlockID = document.blocks.first?.id
-        lastSaved = ""
-        updateWindowTitle()
-    }
-
-    /// Present a Save panel and write Markdown.
-    private func runSaveAsPanel() {
-        let markdown = MarkdownCodec.encode(document)
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "document.md"
-        panel.allowedContentTypes = [.markdown]
-        panel.canCreateDirectories = true
-        // runModal (not the async .begin) so the panel reliably comes to front when
-        // launched from the Save As menu command.
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        EditorView.performWrite(markdown, to: url, synchronous: true)
-        DocumentStore.currentFileURL = url      // subsequent autosaves go here
-        fileURL = url
-        lastSaved = markdown
-        updateWindowTitle()
-    }
-
-    /// Reflect the open file's name in the window's title bar (and proxy icon).
+    /// Reflect the open file's name in the hosting window's title bar (and proxy
+    /// icon). Scoped to this view's own window so multi-window apps stay correct.
     private func updateWindowTitle() {
-        let window = NSApp.mainWindow
-            ?? NSApp.windows.first { $0.isVisible && !($0 is NSPanel) }
-        guard let window else { return }
-        window.representedURL = fileURL
-        window.title = fileURL?.lastPathComponent ?? "MyaeEditor"
-    }
-
-    /// Serial queue for all disk writes. A single FIFO queue guarantees writes
-    /// land in the order they were issued, so a slow background autosave can never
-    /// overwrite a newer manual save (Cmd+S / Save As). Shared across windows: the
-    /// blocks are ordered globally, which is harmless since each carries its own
-    /// destination.
-    private static let saveQueue = DispatchQueue(label: "com.myaeeditor.save", qos: .utility)
-
-    /// Write `markdown` to `url` (or the app-support store when `url` is nil),
-    /// through `saveQueue`. `synchronous` waits for this write *and* every write
-    /// already queued ahead of it to finish before returning — used by Cmd+S,
-    /// Save As, and app termination so the newest content is guaranteed on disk.
-    private static func performWrite(_ markdown: String, to url: URL?, synchronous: Bool) {
-        let work: () -> Void = {
-            if let url {
-                try? markdown.write(to: url, atomically: true, encoding: .utf8)
-            } else {
-                DocumentStore.save(markdown)
-            }
-        }
-        // A serial queue runs `sync` only after all previously-enqueued async work,
-        // so this both preserves ordering and blocks until the write completes.
-        if synchronous {
-            saveQueue.sync(execute: work)
-        } else {
-            saveQueue.async(execute: work)
-        }
-    }
-
-    /// Serialize and write to disk only when the Markdown actually changed.
-    ///
-    /// Encoding walks every block's attributed text (font-trait lookups per run)
-    /// and the write is I/O — both would hitch typing if run inline on the debounce
-    /// tick. `encode` reads the live `@Observable` blocks, so it must run on the
-    /// main actor; only the write is handed to `saveQueue`. Pass `synchronous: true`
-    /// on app termination so a queued write can't be killed mid-flight by exit — it
-    /// also drains the queue when the content is already recorded as saved, since a
-    /// prior autosave's write may still be pending.
-    private func saveIfChanged(synchronous: Bool = false) {
-        let markdown = MarkdownCodec.encode(document)
-        guard markdown != lastSaved else {
-            if synchronous { EditorView.saveQueue.sync {} }   // flush any in-flight write
-            return
-        }
-        lastSaved = markdown
-        EditorView.performWrite(markdown, to: fileURL, synchronous: synchronous)
+        guard configuration.managesWindowTitle, let window = windowBox.window else { return }
+        window.representedURL = controller.fileURL
+        window.title = controller.fileURL?.lastPathComponent ?? "MyaeEditor"
     }
 
     private func rowFrameReader(for block: Block) -> some View {
@@ -373,6 +234,7 @@ struct EditorView: View {
         let A: UInt16 = 0, C: UInt16 = 8, X: UInt16 = 7, V: UInt16 = 9
         let up: UInt16 = 126, down: UInt16 = 125
         let box = windowBox
+        box.isEditable = configuration.isEditable
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak document] event in
             guard let doc = document else { return event }
             // Local monitors are app-wide: only act on events for this editor's
@@ -395,7 +257,7 @@ struct EditorView: View {
             case 53:                                   // Escape
                 doc.clearSelection(); return nil
             case 51, 117:                              // Delete / Forward-delete
-                doc.deleteSelectedBlocks(); return nil
+                if box.isEditable { doc.deleteSelectedBlocks() }; return nil
             default: break
             }
             // Shift+Up / Shift+Down (Shift alone) extend the block selection.
@@ -407,10 +269,10 @@ struct EditorView: View {
 
             if cmd, event.keyCode == A { doc.selectAllBlocks(); return nil }
             if cmd, event.keyCode == C { copy(doc); return nil }
-            if cmd, event.keyCode == X { copy(doc); doc.deleteSelectedBlocks(); return nil }
+            if cmd, event.keyCode == X { copy(doc); if box.isEditable { doc.deleteSelectedBlocks() }; return nil }
             // Paste over a block selection replaces it (Shift not distinguished —
             // literal vs parsed is meaningless when replacing whole blocks).
-            if cmd, event.keyCode == V {
+            if cmd, event.keyCode == V, box.isEditable {
                 if let raw = NSPasteboard.general.string(forType: .string) {
                     doc.replaceSelectedBlocks(with: MarkdownCodec.decodeForPaste(raw))
                 }
@@ -430,12 +292,15 @@ struct EditorView: View {
     }
 
     private var title: some View {
-        TextField("Untitled", text: $docTitle)
+        TextField("Untitled", text: Binding(
+            get: { controller.documentTitle },
+            set: { controller.documentTitle = $0 }))
             .textFieldStyle(.plain)
             .font(.system(size: 40, weight: .heavy))
             .foregroundStyle(.primary)
             .focused($titleFocused)
             .padding(.bottom, 28)
+            .disabled(!configuration.isEditable)
             .onSubmit {
                 // Enter in the title jumps the caret into the first block.
                 titleFocused = false
@@ -444,19 +309,6 @@ struct EditorView: View {
                     document.focusedBlockID = first.id
                 }
             }
-            .onChange(of: docTitle) { _, new in DocumentStore.saveTitle(new) }
             .onChange(of: titleFocused) { _, focused in if focused { document.clearSelection() } }
     }
-
-    /// A fresh, empty document: a single blank paragraph the caret can land in.
-    static func blankBlocks() -> [Block] {
-        [Block(kind: .paragraph,
-               text: NSAttributedString(
-                string: "",
-                attributes: BlockTextView.typingAttributes(for: .paragraph)))]
-    }
-}
-
-#Preview {
-    EditorView().frame(width: 800, height: 700)
 }

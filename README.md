@@ -48,25 +48,56 @@ xcodebuild -project MyaeEditor.xcodeproj -scheme MyaeEditor \
 
 ## Architecture
 
-This app uses SwiftUI **MV (Model-View)** style — there are no ViewModels.
-`@Observable` model classes hold all the data, and views read that data
-directly through `@State`. Simple logic that doesn't need state (like
-converting Markdown, or coloring code) lives in `Services/`.
+The editor is a **local Swift Package** (`MyaeEditorKit`) imported by the app. This makes it reusable — any macOS app can `import MyaeEditorKit` and embed a `MyaeEditor` view.
 
 ```
-MyaeEditor/
-├── App/        MyaeEditorApp.swift          App entry + menu commands
-├── Models/     Models.swift                    @Observable: Block, TableData, EditorDocument
-├── Services/   MarkdownCodec.swift             Markdown <-> blocks, document store
-│               SyntaxHighlighter.swift         Tokenizer + code highlighting
-└── Views/      ContentView, EditorView         Main editor surface
-                BlockRowView, BlockTextView     Block rendering + text input (NSTextView)
-                BlockActionMenu, SlashMenu      Block insertion / actions
-                FormatBar                       Floating inline-format toolbar
-                TableBlockView, ImageBlockView  Rich block types
-                InlineMath                       Math editing + rendering
-                MermaidBlockView, MermaidWebView Mermaid diagram rendering (WKWebView)
+MyaeEditor/                    (app target)
+├── App/
+│   ├── MyaeEditorApp.swift    App entry + menu commands (File → New/Open/Save)
+│   └── ContentView.swift      Window controller + restore policy
+└── Assets.xcassets
+
+MyaeEditorKit/                 (local Swift package)
+├── Package.swift              Swift 5 / macOS 15+
+├── Sources/MyaeEditorKit/
+│   ├── MyaeEditor.swift           ← PUBLIC: two-form editor view
+│   ├── MyaeEditorController.swift ← PUBLIC: document + file I/O
+│   ├── MyaeEditorConfiguration.swift ← PUBLIC: feature flags
+│   ├── MarkdownStore.swift        ← PUBLIC: autosave store
+│   ├── Models/Models.swift        @Observable: Block, TableData, EditorDocument
+│   ├── Services/MarkdownCodec.swift Markdown ↔ blocks codec
+│   │           SyntaxHighlighter.swift Tokenizer + code highlighting
+│   ├── Views/EditorView           Document surface + blocks
+│   │      BlockRowView             Block rendering + drag/select
+│   │      BlockTextView            Text input (NSTextView)
+│   │      BlockActionMenu          Block mutations
+│   │      SlashMenu                Block type picker
+│   │      FormatBar                Floating inline-format toolbar
+│   │      TableBlockView, ImageBlockView, InlineMath
+│   │      MermaidBlockView         Diagram rendering (WKWebView)
+│   └── Resources/mermaid.html, mermaid.min.js
+└── Tests/MyaeEditorKitTests/
 ```
+
+### Using MyaeEditorKit
+
+```swift
+import MyaeEditorKit
+
+// 1. Full control: app owns the controller
+@State var controller = MyaeEditorController(autosave: .default)
+MyaeEditor(controller: controller)
+
+// 2. Simple: Markdown binding (internal controller)
+@State var text: String = ""
+MyaeEditor(markdown: $text)
+
+// 3. Callbacks
+controller.onChange = { ctrl in print("Edited") }
+controller.onSave = { url in print("Saved") }
+```
+
+The package exports five types: `MyaeEditor`, `MyaeEditorController`, `MyaeEditorConfiguration`, `MarkdownStore`, `AutosavePolicy`. Everything else is internal.
 
 ### Why MV, not MVVM
 
@@ -230,7 +261,8 @@ The New and Open menu actions are handled in `FileCommands`
 
 ## Tests
 
-- `MyaeEditorTests/` — unit tests
+- `MyaeEditorKit/Tests/MyaeEditorKitTests/` — package unit tests (controller, markdown codec)
+- `MyaeEditorTests/` — app smoke tests
 - `MyaeEditorUITests/` — UI tests
 
 ## License

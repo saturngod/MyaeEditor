@@ -14,6 +14,10 @@ struct ImageBlockView: View {
     @Bindable var document: EditorDocument
     @Bindable var block: Block
 
+    /// False in read-only mode (set via .disabled from BlockRowView) — also gates
+    /// the context menu and hover button, which .disabled alone doesn't cover.
+    @Environment(\.isEnabled) private var isEnabled
+
     @State private var hovering = false
     /// Decoded once per image path — never re-read from disk during body eval
     /// (hover, selection, etc.), which for a multi-MB image would hitch.
@@ -28,7 +32,7 @@ struct ImageBlockView: View {
                     .frame(maxWidth: 520, maxHeight: 400, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(alignment: .topTrailing) {
-                        if hovering {
+                        if hovering && isEnabled {
                             Button { block.imagePath = nil; document.markEdited() } label: {
                                 Image(systemName: "xmark.circle.fill")
                                     .font(.system(size: 16))
@@ -42,8 +46,10 @@ struct ImageBlockView: View {
                     }
                     .onHover { hovering = $0 }
                     .contextMenu {
-                        Button("Replace…") { pickImage() }
-                        Button("Remove", role: .destructive) { block.imagePath = nil; document.markEdited() }
+                        if isEnabled {
+                            Button("Replace…") { pickImage() }
+                            Button("Remove", role: .destructive) { block.imagePath = nil; document.markEdited() }
+                        }
                     }
             } else {
                 placeholder
@@ -52,7 +58,7 @@ struct ImageBlockView: View {
         // Reload only when the path actually changes.
         .task(id: block.imagePath) {
             if let path = block.imagePath {
-                image = NSImage(contentsOf: DocumentStore.imageURL(for: path))
+                image = NSImage(contentsOf: document.imageURL(for: path))
             } else {
                 image = nil
             }
@@ -86,7 +92,7 @@ struct ImageBlockView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // Reference the picked file in place (relative when near the document,
         // absolute otherwise) — don't copy it into the app's store.
-        block.imagePath = DocumentStore.referencePath(for: url)
+        block.imagePath = document.referencePath(for: url)
         document.markEdited()
     }
 }

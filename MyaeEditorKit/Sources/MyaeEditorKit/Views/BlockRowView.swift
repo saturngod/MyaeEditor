@@ -29,6 +29,8 @@ struct BlockRowView: View {
     /// Selection drag ended.
     var onSelectionDragEnded: () -> Void = {}
 
+    @Environment(\.myaeConfiguration) private var config
+
     @State private var hovering = false
     @State private var showBlockMenu = false
     @State private var showSlashMenu = false
@@ -59,7 +61,7 @@ struct BlockRowView: View {
         HStack(alignment: .top, spacing: 4) {
             controls
                 .padding(.top, controlsTop)
-                .opacity(hovering || draggingID == block.id ? 1 : 0)
+                .opacity(config.isEditable && (hovering || draggingID == block.id) ? 1 : 0)
                 .animation(.easeInOut(duration: 0.15), value: hovering)
             content
                 .padding(.leading, CGFloat(block.depth) * 24)
@@ -114,10 +116,11 @@ struct BlockRowView: View {
                 .help("Click for options, drag to move")
                 .accessibilityLabel("Block options")
                 // A plain click opens the action menu; a drag reorders.
-                .onTapGesture { showBlockMenu = true }
+                .onTapGesture { if config.showsBlockActionMenu { showBlockMenu = true } }
                 .gesture(
                     DragGesture(minimumDistance: 2, coordinateSpace: .named("editor"))
                         .onChanged { value in
+                            guard config.allowsDragReorder else { return }
                             if draggingID != block.id {
                                 draggingID = block.id
                                 // Reordering invalidates any block-range selection
@@ -150,19 +153,24 @@ struct BlockRowView: View {
                 .padding(.vertical, 6)
                 .layoutPriority(1)   // span the row width instead of yielding to the trailing spacer
         case .table:
+            // .disabled centrally blocks every mutation control inside (cells,
+            // add/insert/delete rows and columns) in read-only mode.
             TableBlockView(document: document, block: block)
+                .disabled(!config.isEditable)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(1)   // fill the row width instead of yielding to the trailing spacer
         case .image:
             ImageBlockView(document: document, block: block)
+                .disabled(!config.isEditable)
                 .padding(.vertical, 4)
         case .equation:
             EquationBlockView(document: document, block: block)
+                .disabled(!config.isEditable)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .layoutPriority(1)
         case .code:
-            if block.language == .mermaid && !isFocused && !block.isEmpty {
+            if block.language == .mermaid && config.rendersMermaid && !isFocused && !block.isEmpty {
                 MermaidBlockView(document: document, block: block)
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -312,6 +320,7 @@ struct BlockRowView: View {
                 .padding(.top, markerBaselineTop(font: .systemFont(ofSize: 15), glyph: "0"))
         case .todo:
             Button {
+                guard config.isEditable else { return }
                 withAnimation(.spring(response: 0.25, dampingFraction: 0.55)) { block.checked.toggle() }
                 document.markEdited()
             } label: {
@@ -341,6 +350,8 @@ struct BlockRowView: View {
             focusAtStart: isFocused && document.focusAtStart,
             pendingCaretLocation: pendingCaret,
             formatBar: formatBar,
+            isEditable: config.isEditable,
+            showsFormatBar: config.showsFormatBar,
             onEnter: handleEnter,
             onShiftEnter: { false },          // let NSTextView insert a soft newline
             onBackspaceAtStart: handleBackspaceAtStart,
@@ -354,7 +365,10 @@ struct BlockRowView: View {
                 showSlashMenu = false; slashStart = nil   // block surgery invalidates any open slash query
                 document.paste(pasted, into: block, textBefore: before, textAfter: after)
             },
-            onSlash: { loc in showSlashMenu = true; slashQuery = ""; slashStart = loc },
+            onSlash: { loc in
+                guard config.showsSlashMenu else { return }
+                showSlashMenu = true; slashQuery = ""; slashStart = loc
+            },
             onFocused: {
                 document.clearSelection()   // editing a block ends any block selection
                 if document.focusedBlockID != block.id { document.focusedBlockID = block.id }

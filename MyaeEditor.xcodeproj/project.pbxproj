@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A0C47B822FF5BBCA00FCBFE3 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A0C47B812FF5BBCA00FCBFE3 /* AppIcon.icon */; };
+		A0FEED032FF7000000000003 /* MyaeEditorKit in Frameworks */ = {isa = PBXBuildFile; productRef = A0FEED022FF7000000000002 /* MyaeEditorKit */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A0FEED032FF7000000000003 /* MyaeEditorKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			);
 			name = MyaeEditor;
 			packageProductDependencies = (
+				A0FEED022FF7000000000002 /* MyaeEditorKit */,
 			);
 			productName = MyaeEditor;
 			productReference = A054B0C22FF406F50010B682 /* Myae.app */;
@@ -201,6 +204,9 @@
 			);
 			mainGroup = A054B0B92FF406F50010B682;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A0FEED012FF7000000000001 /* XCLocalSwiftPackageReference "MyaeEditorKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A054B0C32FF406F50010B682 /* Products */;
 			projectDirPath = "";
@@ -582,6 +588,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A0FEED012FF7000000000001 /* XCLocalSwiftPackageReference "MyaeEditorKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = MyaeEditorKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A0FEED022FF7000000000002 /* MyaeEditorKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MyaeEditorKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A054B0BA2FF406F50010B682 /* Project object */;
 }

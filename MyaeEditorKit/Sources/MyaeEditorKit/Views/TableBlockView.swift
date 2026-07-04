@@ -313,6 +313,9 @@ struct TableCellMenu {
 /// hovering during a scroll and typing in a single cell no longer re-render the
 /// entire grid.
 struct TableCellView: View, Equatable {
+    /// False in read-only mode — gates the context-menu mutation items.
+    @Environment(\.isEnabled) private var isEnabled
+
     let text: String
     let r: Int
     let c: Int
@@ -379,15 +382,19 @@ struct TableCellView: View, Equatable {
         }
         .onHover(perform: onHover)
         .contextMenu {
-            Button("Insert row above") { menu.insertRowAbove() }
-            Button("Insert row below") { menu.insertRowBelow() }
-            Button("Insert column left") { menu.insertColumnLeft() }
-            Button("Insert column right") { menu.insertColumnRight() }
-            Divider()
-            Button("Delete row", role: .destructive) { menu.deleteRow() }
-            Button("Delete column", role: .destructive) { menu.deleteColumn() }
-            Divider()
-            Button("Delete table", role: .destructive) { menu.deleteTable() }
+            // Context menus aren't controls, so .disabled alone doesn't block
+            // them — hide the mutation items entirely in read-only mode.
+            if isEnabled {
+                Button("Insert row above") { menu.insertRowAbove() }
+                Button("Insert row below") { menu.insertRowBelow() }
+                Button("Insert column left") { menu.insertColumnLeft() }
+                Button("Insert column right") { menu.insertColumnRight() }
+                Divider()
+                Button("Delete row", role: .destructive) { menu.deleteRow() }
+                Button("Delete column", role: .destructive) { menu.deleteColumn() }
+                Divider()
+                Button("Delete table", role: .destructive) { menu.deleteTable() }
+            }
         }
     }
 

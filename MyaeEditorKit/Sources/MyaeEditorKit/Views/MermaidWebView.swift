@@ -37,7 +37,7 @@ struct MermaidWebView: NSViewRepresentable {
         web.setValue(false, forKey: "drawsBackground")   // transparent; page paints its own bg
         web.autoresizingMask = [.width, .height]
 
-        if let html = Bundle.main.url(forResource: "mermaid", withExtension: "html") {
+        if let html = Bundle.module.url(forResource: "mermaid", withExtension: "html") {
             web.loadFileURL(html, allowingReadAccessTo: html.deletingLastPathComponent())
         }
         context.coordinator.webView = web

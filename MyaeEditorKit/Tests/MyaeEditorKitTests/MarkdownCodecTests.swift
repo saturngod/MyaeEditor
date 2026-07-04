@@ -7,7 +7,7 @@
 
 import Testing
 import AppKit
-@testable import MyaeEditor
+@testable import MyaeEditorKit
 
 struct MyaeEditorTests {
 

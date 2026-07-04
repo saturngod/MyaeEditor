@@ -257,20 +257,56 @@ final class EditorDocument {
     @ObservationIgnored var selectionAnchorID: UUID?
     @ObservationIgnored var selectionLeadID: UUID?
 
-    /// Fires whenever the document content changes. Drives debounced autosave.
-    /// (Not @Observable-tracked, so it doesn't re-render the view on every edit.)
+    /// Fires whenever the document content changes. The controller debounces this
+    /// to drive autosave and dirty tracking. (Not @Observable-tracked, so it
+    /// doesn't re-render the view on every edit.)
     @ObservationIgnored let didEdit = PassthroughSubject<Void, Never>()
-
-    /// Debounced autosave trigger: fires ~2s after the last edit, never on idle.
-    /// Owned by the document (a single persisted instance) so the pipeline's
-    /// debounce state survives EditorView re-inits.
-    @ObservationIgnored lazy var autosaveSignal: AnyPublisher<Void, Never> =
-        didEdit
-            .debounce(for: .seconds(2), scheduler: RunLoop.main)
-            .eraseToAnyPublisher()
 
     /// Signal that content changed (call after any content mutation).
     func markEdited() { didEdit.send() }
+
+    // MARK: Image path resolution
+    //
+    // Relative image paths are resolved against the open file's folder. Formerly
+    // a process-wide global (`DocumentStore.currentFileURL`); now per-document so
+    // two windows editing different files can't clobber each other's base.
+
+    /// Folder of the open file. `nil` for an unsaved document (which stores image
+    /// paths as absolute and resolves them against `imageFallbackDirectory`).
+    @ObservationIgnored var imageFileDirectory: URL?
+    /// Base for relative image paths when the document has no file yet — the
+    /// autosave store's directory.
+    @ObservationIgnored var imageFallbackDirectory: URL = MarkdownStore.default.directory
+
+    /// Directory that relative image paths resolve against — the open file's
+    /// folder, or the fallback store for the unsaved default.
+    var imageBaseDirectory: URL { imageFileDirectory ?? imageFallbackDirectory }
+
+    /// Resolve a stored image path — absolute ("/Users/…") or relative to the
+    /// document's directory ("./images/x.png", "../shared/x.png") — to a URL.
+    func imageURL(for path: String) -> URL {
+        if path.hasPrefix("/") { return URL(fileURLWithPath: path) }
+        return URL(fileURLWithPath: path, relativeTo: imageBaseDirectory).standardized
+    }
+
+    /// The path to store for a picked image: a relative link when the file sits
+    /// in the document's directory or one level up ("./…" / "../…"); otherwise
+    /// the absolute path (so we never emit deep "../../.." chains). A document
+    /// with no file yet (unsaved) always stores the absolute path. Nothing is
+    /// copied — the original file is referenced in place.
+    func referencePath(for url: URL) -> String {
+        let absolute = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard imageFileDirectory != nil else { return absolute }   // unsaved doc → full path
+        let file = url.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let base = imageBaseDirectory.resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        var i = 0
+        while i < file.count, i < base.count, file[i] == base[i] { i += 1 }
+        let ups = base.count - i
+        let downs = file[i...].joined(separator: "/")
+        if ups > 1 { return absolute }
+        if ups == 1 { return "../" + downs }
+        return "./" + downs
+    }
 
     init(blocks: [Block] = [Block()]) {
         self.blocks = blocks
