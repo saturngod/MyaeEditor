@@ -28,7 +28,8 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             if let controller {
-                MyaeEditor(controller: controller)
+                MyaeEditor(controller: controller,
+                           configuration: MyaeEditorConfiguration(showsTitleField: false))
             }
         }
         .onAppear {
