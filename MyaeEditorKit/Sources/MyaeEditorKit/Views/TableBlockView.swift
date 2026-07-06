@@ -21,10 +21,18 @@ struct TableBlockView: View {
     @Bindable var block: Block
     /// Shared floating format toolbar (bold / italic / strike / code).
     var formatBar: FormatBarController
+    /// Reports hover changes up to the enclosing row so its left-gutter controls
+    /// (+ and drag handle) stay visible while the pointer is over the table's
+    /// AppKit-backed cells — the row's own `.onHover` drops there.
+    var onHoverChange: ((Bool) -> Void)? = nil
 
     @State private var hovering = false
     @State private var hoveredRow: Int?
     @State private var hoveredColumn: Int?
+    /// Delays clearing `hoveredRow`/`hoveredColumn` when the pointer leaves the
+    /// grid, so it can cross into the row/column "…" handles (which float in the
+    /// gutter / top-bleed, outside the grid's `.onHover` frame) before they hide.
+    @State private var clearHoverTask: Task<Void, Never>?
     /// The cell currently editing (drives the active-cell ring + Tab navigation).
     /// Plain state, not @FocusState, because cells are NSTextView-backed.
     @State private var activeCell: TableCellID?
@@ -75,8 +83,27 @@ struct TableBlockView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .onHover {
                 hovering = $0
-                if !$0 { hoveredRow = nil; hoveredColumn = nil }
+                onHoverChange?($0)
+                if $0 { keepHover() } else { scheduleClearHover() }
             }
+        }
+    }
+
+    /// Cancel a pending hover clear — the pointer is over the grid or a handle.
+    private func keepHover() {
+        clearHoverTask?.cancel()
+        clearHoverTask = nil
+    }
+
+    /// Clear the hovered row/column after a short grace period, giving the
+    /// pointer time to cross into a floating "…" handle before it disappears.
+    private func scheduleClearHover() {
+        clearHoverTask?.cancel()
+        clearHoverTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            hoveredRow = nil
+            hoveredColumn = nil
         }
     }
 
@@ -91,14 +118,17 @@ struct TableBlockView: View {
             ScrollView(.horizontal) {
                 tableGrid(table)
                     .frame(width: contentWidth(table))
+                    // Reserve room for the column handles INSIDE the scroll
+                    // view's bounds — content drawn above an NSScrollView's
+                    // frame renders (with a clip bleed) but can never be
+                    // clicked, since AppKit hit-testing stops at the frame.
+                    .padding(.top, topBleed)
             }
             // Don't rubber-band horizontally when the table already fits.
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            // Disable the default clip, then re-clip so column handles above the
-            // grid aren't cut off while cell content is still clipped at the
-            // viewport edges.
-            .scrollClipDisabled()
-            .clipShape(TopBleedClip(bleed: topBleed))
+            // Pull the row back up so the reserved handle strip overlaps the
+            // gap above the block instead of pushing the grid down.
+            .padding(.top, -topBleed)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { availableWidth = $0 }
             .coordinateSpace(name: "tableSpace")
             // Row handles are pinned to the viewport's left gutter (they must
@@ -175,7 +205,7 @@ struct TableBlockView: View {
                 .menuIndicator(.hidden)
                 .frame(maxWidth: .infinity)
                 .opacity(hoveredColumn == c ? 1 : 0)
-                .onHover { if $0 { hoveredColumn = c } }
+                .onHover { if $0 { keepHover(); hoveredColumn = c } }
                 .help("Column options")
             }
         }
@@ -207,7 +237,7 @@ struct TableBlockView: View {
                         .opacity(hoveredRow == r ? 1 : 0)
                         // Keep the handle alive while the pointer is on it, so it
                         // doesn't fade out from under the cursor as you reach for it.
-                        .onHover { if $0 { hoveredRow = r } }
+                        .onHover { if $0 { keepHover(); hoveredRow = r } }
                 }
             }
         }
@@ -265,7 +295,7 @@ struct TableBlockView: View {
                     document.markEdited()
                 }
             },
-            onHover: { if $0 { if hoveredRow != r { hoveredRow = r }; if hoveredColumn != c { hoveredColumn = c } } },
+            onHover: { if $0 { keepHover(); if hoveredRow != r { hoveredRow = r }; if hoveredColumn != c { hoveredColumn = c } } },
             menu: TableCellMenu(
                 insertRowAbove: { edit { table.insertRow(at: r) } },
                 insertRowBelow: { edit { table.insertRow(at: r + 1) } },
@@ -432,13 +462,3 @@ struct TableCellView: View, Equatable {
     }
 }
 
-/// A clip that matches the view's bounds but extends upward by `bleed`, so the
-/// column handles floating above the grid stay visible while the horizontal
-/// scroll still clips cell content at the left/right/bottom viewport edges.
-private struct TopBleedClip: Shape {
-    var bleed: CGFloat
-    func path(in rect: CGRect) -> Path {
-        Path(CGRect(x: rect.minX, y: rect.minY - bleed,
-                    width: rect.width, height: rect.height + bleed))
-    }
-}

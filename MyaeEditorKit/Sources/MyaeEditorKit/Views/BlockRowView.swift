@@ -32,6 +32,9 @@ struct BlockRowView: View {
     @Environment(\.myaeConfiguration) private var config
 
     @State private var hovering = false
+    /// True while the pointer is over AppKit-backed content (e.g. table cells)
+    /// that swallows the row's own `.onHover`, keeping the left controls visible.
+    @State private var contentHovering = false
     @State private var showBlockMenu = false
     @State private var showSlashMenu = false
     @State private var slashQuery = ""
@@ -62,7 +65,7 @@ struct BlockRowView: View {
         HStack(alignment: .top, spacing: 4) {
             controls
                 .padding(.top, controlsTop)
-                .opacity(config.isEditable && (hovering || draggingID == block.id) ? 1 : 0)
+                .opacity(config.isEditable && (hovering || contentHovering || draggingID == block.id) ? 1 : 0)
                 .animation(.easeInOut(duration: 0.15), value: hovering)
             content
                 .padding(.leading, CGFloat(block.depth) * 24)
@@ -110,8 +113,7 @@ struct BlockRowView: View {
             .foregroundStyle(.secondary)
             .help("Add a block below")
 
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 12))
+            GripDots()
                 .frame(width: 18, height: 24)
                 .foregroundStyle(draggingID == block.id ? Color.accentColor : .secondary)
                 .contentShape(Rectangle())
@@ -157,7 +159,8 @@ struct BlockRowView: View {
         case .table:
             // .disabled centrally blocks every mutation control inside (cells,
             // add/insert/delete rows and columns) in read-only mode.
-            TableBlockView(document: document, block: block, formatBar: formatBar)
+            TableBlockView(document: document, block: block, formatBar: formatBar,
+                           onHoverChange: { contentHovering = $0 })
                 .disabled(!config.isEditable)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -648,5 +651,20 @@ struct BlockRowView: View {
             mutable.addAttribute(.foregroundColor, value: color, range: full)
         }
         block.text = mutable
+    }
+}
+
+// A 6-dot grip glyph used as the block drag handle. Reads unmistakably as
+// "drag to move" (unlike a three-line hamburger). Inherits foregroundStyle.
+private struct GripDots: View {
+    var body: some View {
+        Grid(horizontalSpacing: 2.5, verticalSpacing: 2.5) {
+            ForEach(0..<3, id: \.self) { _ in
+                GridRow {
+                    Circle().frame(width: 2.5, height: 2.5)
+                    Circle().frame(width: 2.5, height: 2.5)
+                }
+            }
+        }
     }
 }
