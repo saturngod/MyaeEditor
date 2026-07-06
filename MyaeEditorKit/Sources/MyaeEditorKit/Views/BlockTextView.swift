@@ -84,7 +84,10 @@ struct BlockTextView: NSViewRepresentable {
     var showsFormatBar: Bool = true
 
     // Callbacks. Each returns `true` if it consumed the event.
-    var onEnter: () -> Bool
+    /// Enter pressed. Args: text before the caret, text after the caret (any
+    /// selection excluded). The row splits the block: `before` stays, `after`
+    /// moves to the new block.
+    var onEnter: (_ before: NSAttributedString, _ after: NSAttributedString) -> Bool
     var onShiftEnter: () -> Bool
     var onBackspaceAtStart: () -> Bool
     var onArrowUpAtTop: () -> Bool
@@ -217,7 +220,11 @@ struct BlockTextView: NSViewRepresentable {
                         onCaret()
                     } else if atStart {
                         tv.setSelectedRange(NSRange(location: 0, length: 0))
-                    } else {
+                    } else if tv.selectedRange().length == 0 {
+                        // Default placement only when there's no selection to keep —
+                        // a hover re-render can bounce focus and land here while the
+                        // user has an active selection (format bar showing); stomping
+                        // it to a caret would clear the selection under their mouse.
                         tv.setSelectedRange(NSRange(location: length, length: 0))
                     }
                     onFocus()
@@ -419,7 +426,17 @@ struct BlockTextView: NSViewRepresentable {
             switch commandSelector {
             case #selector(NSResponder.insertNewline(_:)):
                 if shift { return parent.onShiftEnter() }
-                return parent.onEnter()
+                // Split at the caret: hand the row the text on each side so the
+                // part after the caret moves into the new block.
+                let sel = textView.selectedRange()
+                let storage = textView.textStorage
+                let length = storage?.length ?? 0
+                let before = storage?.attributedSubstring(
+                    from: NSRange(location: 0, length: sel.location)) ?? NSAttributedString()
+                let afterLoc = sel.location + sel.length
+                let after = storage?.attributedSubstring(
+                    from: NSRange(location: afterLoc, length: length - afterLoc)) ?? NSAttributedString()
+                return parent.onEnter(before, after)
 
             case #selector(NSResponder.deleteBackward(_:)):
                 let r = textView.selectedRange()
@@ -665,8 +682,16 @@ final class AutoSizingTextView: NSTextView {
             coordinator?.parent.onSelectionDragEnded()
         } else {
             if dragStarted { coordinator?.parent.onSelectionDragEnded() }
-            // Finalize the selection so textViewDidChangeSelection fires (format bar).
+            // Finalize the selection, then show the format bar directly —
+            // setSelectedRange with an unchanged range doesn't reliably post
+            // textViewDidChangeSelection, so don't depend on the delegate.
             setSelectedRange(selectedRange(), affinity: .downstream, stillSelecting: false)
+            // Deferred: we're still inside the .eventTracking runloop mode here,
+            // where ordering a panel front doesn't reliably take effect.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.coordinator?.updateFormatBar(self)
+            }
         }
     }
 
@@ -694,7 +719,13 @@ final class AutoSizingTextView: NSTextView {
     override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
         needsDisplay = true   // hide placeholder on blur
-        coordinator?.parent.formatBar.hide()
+        // Don't hide the format bar here: a hover-driven SwiftUI re-render can
+        // resign/reacquire first responder on this view spuriously (no real
+        // focus change), and hiding on that would drop the bar out from under
+        // the user while they're moving the mouse toward it. Real focus loss
+        // (switching blocks, clicking away, collapsing the selection) already
+        // hides it via textViewDidChangeSelection's empty-selection check, and
+        // app-deactivate is handled by the panel's own hidesOnDeactivate.
         return ok
     }
 

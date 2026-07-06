@@ -438,7 +438,7 @@ struct BlockRowView: View {
 
     // MARK: Key handling
 
-    private func handleEnter() -> Bool {
+    private func handleEnter(before: NSAttributedString, after: NSAttributedString) -> Bool {
         // In an empty list/todo item, Enter outdents one level, then exits to a paragraph.
         if block.kind.continuesOnEnter && block.isEmpty {
             if block.depth > 0 {
@@ -451,7 +451,15 @@ struct BlockRowView: View {
             return true
         }
         let nextKind: BlockKind = block.kind.continuesOnEnter ? block.kind : .paragraph
+        // Split at the caret: the text after the caret moves into the new block.
+        // Code blocks are never split — multi-line code lives in one block.
+        let splitting = block.kind != .code && after.length > 0
+        if splitting { block.text = before }
         let new = document.insertBlock(after: block, kind: nextKind)
+        if splitting {
+            new.text = after
+            document.focusAtStart = true   // caret before the moved text
+        }
         document.focusedBlockID = new.id
         return true
     }
