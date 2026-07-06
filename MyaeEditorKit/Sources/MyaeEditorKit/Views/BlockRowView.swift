@@ -35,6 +35,7 @@ struct BlockRowView: View {
     @State private var showBlockMenu = false
     @State private var showSlashMenu = false
     @State private var slashQuery = ""
+    @State private var slashSelection = 0
     /// Character index of the "/" that opened the menu, so the query and the
     /// removal target that exact command — not the last "/" in the block (which
     /// may be leftover text the user kept by pressing Esc).
@@ -355,8 +356,14 @@ struct BlockRowView: View {
             onEnter: handleEnter,
             onShiftEnter: { false },          // let NSTextView insert a soft newline
             onBackspaceAtStart: handleBackspaceAtStart,
-            onArrowUpAtTop: { moveFocus(up: true) },
-            onArrowDownAtBottom: { moveFocus(up: false) },
+            onArrowUpAtTop: {
+                if showSlashMenu { moveSlashSelection(-1); return true }
+                return moveFocus(up: true)
+            },
+            onArrowDownAtBottom: {
+                if showSlashMenu { moveSlashSelection(1); return true }
+                return moveFocus(up: false)
+            },
             onExtendSelectionUp: { document.extendBlockSelection(up: true, from: block.id); return true },
             onExtendSelectionDown: { document.extendBlockSelection(up: false, from: block.id); return true },
             onTab: { document.indent(block); return true },          // always consume Tab
@@ -367,7 +374,7 @@ struct BlockRowView: View {
             },
             onSlash: { loc in
                 guard config.showsSlashMenu else { return }
-                showSlashMenu = true; slashQuery = ""; slashStart = loc
+                showSlashMenu = true; slashQuery = ""; slashStart = loc; slashSelection = 0
             },
             onFocused: {
                 document.clearSelection()   // editing a block ends any block selection
@@ -392,7 +399,7 @@ struct BlockRowView: View {
             if showSlashMenu { syncSlashMenuQuery() } else { applyMarkdownShortcut() }
         }
         .popover(isPresented: $showSlashMenu, arrowEdge: .bottom) {
-            SlashMenu(query: $slashQuery) { kind in
+            SlashMenu(query: $slashQuery, selection: $slashSelection) { kind in
                 selectSlashKind(kind)
             } onDismiss: {
                 // Esc just closes the menu; leave the typed "/" (and any query)
@@ -439,6 +446,18 @@ struct BlockRowView: View {
     // MARK: Key handling
 
     private func handleEnter(before: NSAttributedString, after: NSAttributedString) -> Bool {
+        // While the slash menu is open, Enter picks the highlighted command
+        // (keyboard focus stays in the text view, so the popover never sees it).
+        if showSlashMenu {
+            let results = SlashMenu.results(for: slashQuery)
+            if results.indices.contains(slashSelection) {
+                selectSlashKind(results[slashSelection])
+            } else {
+                showSlashMenu = false
+                slashStart = nil
+            }
+            return true
+        }
         // In an empty list/todo item, Enter outdents one level, then exits to a paragraph.
         if block.kind.continuesOnEnter && block.isEmpty {
             if block.depth > 0 {
@@ -482,6 +501,12 @@ struct BlockRowView: View {
             return true
         }
         return document.mergeIntoPrevious(block)
+    }
+
+    private func moveSlashSelection(_ delta: Int) {
+        let count = SlashMenu.results(for: slashQuery).count
+        guard count > 0 else { return }
+        slashSelection = (slashSelection + delta + count) % count
     }
 
     private func moveFocus(up: Bool) -> Bool {

@@ -672,6 +672,7 @@ final class AutoSizingTextView: NSTextView {
                     escalated = true
                     setSelectedRange(NSRange(location: anchorRange.location, length: 0),
                                      affinity: .downstream, stillSelecting: true)
+                    coordinator?.parent.formatBar.hide()   // block selection replaces the text selection
                     window.makeFirstResponder(nil)   // drop caret so block tint shows alone
                 }
                 coordinator?.parent.onSelectionDragChanged(p.y, bounds.height)
@@ -710,6 +711,7 @@ final class AutoSizingTextView: NSTextView {
         let allSelected = selectedRange() == NSRange(location: 0, length: length)
         if length == 0 || allSelected {
             coordinator?.parent.onSelectAllBlocks()
+            coordinator?.parent.formatBar.hide()   // block selection replaces the text selection
             window?.makeFirstResponder(nil)   // drop text caret so block selection shows alone
         } else {
             super.selectAll(sender)
@@ -861,7 +863,10 @@ final class AutoSizingTextView: NSTextView {
         guard range.length > 0, let storage = textStorage else { return }
         let adding = !rangeHasInlineCode(range)
         guard shouldChangeText(in: range, replacementString: nil) else { return }
-        let base = font ?? NSFont.systemFont(ofSize: 16)
+        // The block kind's base font, NOT `self.font` — the latter reflects the
+        // selection, which is already monospaced when removing inline code, so
+        // "restoring" it would just re-apply the code font.
+        let base = coordinator?.parent.kind.baseFont ?? font ?? NSFont.systemFont(ofSize: 16)
         storage.beginEditing()
         if adding {
             storage.addAttribute(.inlineCode, value: true, range: range)

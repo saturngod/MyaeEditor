@@ -9,19 +9,24 @@ import SwiftUI
 
 struct SlashMenu: View {
     @Binding var query: String
+    /// Hoisted to the owning row: keyboard focus stays in the block's text view
+    /// while this popover is open, so Enter/arrows arrive there — the row drives
+    /// this selection and chooses from `results(for:)` itself.
+    @Binding var selection: Int
     let onSelect: (BlockKind) -> Void
     let onDismiss: () -> Void
 
-    @State private var selection: Int = 0
     @FocusState private var searchFocused: Bool
 
-    private var results: [BlockKind] {
+    static func results(for query: String) -> [BlockKind] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         if q.isEmpty { return BlockKind.allCases }
         return BlockKind.allCases.filter {
             $0.title.lowercased().contains(q) || $0.rawValue.lowercased().contains(q)
         }
     }
+
+    private var results: [BlockKind] { Self.results(for: query) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
