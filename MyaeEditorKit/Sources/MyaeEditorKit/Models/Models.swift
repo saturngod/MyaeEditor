@@ -15,6 +15,9 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
     case heading1
     case heading2
     case heading3
+    case heading4
+    case heading5
+    case heading6
     case bulleted
     case numbered
     case todo
@@ -37,6 +40,9 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
         case .heading1:  "Heading 1"
         case .heading2:  "Heading 2"
         case .heading3:  "Heading 3"
+        case .heading4:  "Heading 4"
+        case .heading5:  "Heading 5"
+        case .heading6:  "Heading 6"
         case .bulleted:  "Bulleted list"
         case .numbered:  "Numbered list"
         case .todo:      "To-do list"
@@ -56,6 +62,9 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
         case .heading1:  "Big section heading."
         case .heading2:  "Medium section heading."
         case .heading3:  "Small section heading."
+        case .heading4:  "Smaller section heading."
+        case .heading5:  "Tiny section heading."
+        case .heading6:  "Smallest section heading."
         case .bulleted:  "Create a simple bulleted list."
         case .numbered:  "Create a list with numbering."
         case .todo:      "Track tasks with a checkbox."
@@ -75,6 +84,9 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
         case .heading1:  "textformat.size.larger"
         case .heading2:  "textformat.size"
         case .heading3:  "textformat.size.smaller"
+        case .heading4:  "textformat.size.smaller"
+        case .heading5:  "textformat.size.smaller"
+        case .heading6:  "textformat.size.smaller"
         case .bulleted:  "list.bullet"
         case .numbered:  "list.number"
         case .todo:      "checklist"
@@ -94,6 +106,9 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
         case .heading1: return .systemFont(ofSize: 30, weight: .bold)
         case .heading2: return .systemFont(ofSize: 24, weight: .bold)
         case .heading3: return .systemFont(ofSize: 20, weight: .semibold)
+        case .heading4: return .systemFont(ofSize: 18, weight: .semibold)
+        case .heading5: return .systemFont(ofSize: 16, weight: .semibold)
+        case .heading6: return .systemFont(ofSize: 14, weight: .semibold)
         case .code:     return .monospacedSystemFont(ofSize: 14, weight: .regular)
         default:        return .systemFont(ofSize: 16, weight: .regular)
         }
@@ -102,7 +117,7 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
     /// Text-editing block kinds that can be freely converted between each other.
     var isTextual: Bool {
         switch self {
-        case .paragraph, .heading1, .heading2, .heading3,
+        case .paragraph, .heading1, .heading2, .heading3, .heading4, .heading5, .heading6,
              .bulleted, .numbered, .todo, .quote, .code: return true
         default: return false
         }
@@ -110,7 +125,7 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
 
     /// The kinds offered in the "Turn into" menu, in display order.
     static let convertible: [BlockKind] = [
-        .paragraph, .heading1, .heading2, .heading3,
+        .paragraph, .heading1, .heading2, .heading3, .heading4, .heading5, .heading6,
         .bulleted, .numbered, .todo, .quote, .code,
     ]
 
@@ -127,6 +142,9 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
         case .heading1: "Heading 1"
         case .heading2: "Heading 2"
         case .heading3: "Heading 3"
+        case .heading4: "Heading 4"
+        case .heading5: "Heading 5"
+        case .heading6: "Heading 6"
         case .quote:    "Empty quote"
         case .code:     "Code"
         default:        "Type '/' for commands"
@@ -179,6 +197,14 @@ enum ColumnAlignment: String {
         case .right:  return .trailing
         case .center: return .center
         default:      return .leading
+        }
+    }
+
+    var nsTextAlignment: NSTextAlignment {
+        switch self {
+        case .right:  return .right
+        case .center: return .center
+        default:      return .left
         }
     }
 }

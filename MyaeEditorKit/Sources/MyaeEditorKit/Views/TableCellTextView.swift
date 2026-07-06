@@ -1,0 +1,205 @@
+//
+//  TableCellTextView.swift
+//  MyaeEditor
+//
+//  An NSTextView-backed editor for a single table cell. It reuses the same
+//  formatting machinery as the main editor (AutoSizingTextView's bold/italic/
+//  strike/inline-code toggles + the floating FormatBarController), so a cell
+//  supports Cmd+B/I, Cmd+Shift+S, Cmd+E, and the selection popover exactly like a
+//  paragraph block. The cell's text is stored as inline Markdown in the model, so
+//  this view converts Markdown → attributed on load and attributed → Markdown on
+//  every edit.
+//
+
+import SwiftUI
+import AppKit
+
+/// NSTextView subclass for cells: reports focus changes and refreshes the format
+/// bar after a Cmd-key formatting shortcut. Inherits all the trait-toggle methods
+/// (and auto-sizing) from `AutoSizingTextView`.
+final class TableCellNSTextView: AutoSizingTextView {
+    var onFocusChange: ((Bool) -> Void)?
+    var cellFormatBar: FormatBarController?
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChange?(true) }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocusChange?(false) }
+        return ok
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let handled = super.performKeyEquivalent(with: event)
+        // super applied the toggle (Cmd+B/I/E, Cmd+Shift+S) but has no coordinator
+        // to refresh the bar's button state — do it here.
+        if handled { cellFormatBar?.refreshTraits(for: self) }
+        return handled
+    }
+}
+
+struct TableCellTextView: NSViewRepresentable {
+    /// The cell's inline-Markdown text (the model value).
+    @Binding var markdown: String
+    let isHeader: Bool
+    let alignment: ColumnAlignment
+    var formatBar: FormatBarController
+    let cellID: TableCellID
+    /// The table's currently-active cell; the view makes itself first responder
+    /// when this equals its own id, and sets it when it gains focus by click.
+    @Binding var activeCell: TableCellID?
+    /// Tab / Shift+Tab: move to the next / previous cell. Arg is forward.
+    var onTab: (_ forward: Bool) -> Void
+
+    private var baseFont: NSFont {
+        .systemFont(ofSize: 14, weight: isHeader ? .semibold : .regular)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> TableCellNSTextView {
+        let tv = TableCellNSTextView()
+        tv.delegate = context.coordinator
+        tv.isRichText = true
+        tv.allowsUndo = true
+        tv.isEditable = true
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.backgroundColor = .clear
+        tv.textContainerInset = NSSize(width: 8, height: 7)
+        tv.textContainer?.lineFragmentPadding = 0
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.textContainer?.widthTracksTextView = true
+        tv.textContainer?.heightTracksTextView = false
+        tv.font = baseFont
+        tv.baseFontOverride = baseFont
+        tv.alignment = alignment.nsTextAlignment
+        tv.cellFormatBar = formatBar
+        tv.typingAttributes = typingAttributes
+        tv.textStorage?.setAttributedString(attributed(from: markdown))
+        let coordinator = context.coordinator
+        coordinator.lastMarkdown = markdown
+        tv.onFocusChange = { [weak tv, weak coordinator] focused in
+            guard let tv, let coordinator else { return }
+            coordinator.focusChanged(tv, focused: focused)
+        }
+        // Don't intercept block-reorder drags.
+        tv.unregisterDraggedTypes()
+        return tv
+    }
+
+    func updateNSView(_ tv: TableCellNSTextView, context: Context) {
+        context.coordinator.parent = self
+        tv.cellFormatBar = formatBar
+
+        if tv.font != baseFont {
+            tv.font = baseFont
+            tv.baseFontOverride = baseFont
+            tv.typingAttributes = typingAttributes
+        }
+        if tv.alignment != alignment.nsTextAlignment {
+            tv.alignment = alignment.nsTextAlignment
+        }
+
+        // Rebuild only on an *external* change to the model (open/undo/paste),
+        // never from our own edit — that would clobber the caret mid-typing.
+        if markdown != context.coordinator.lastMarkdown {
+            context.coordinator.lastMarkdown = markdown
+            let sel = tv.selectedRange()
+            let attr = attributed(from: markdown)
+            tv.textStorage?.setAttributedString(attr)
+            tv.setSelectedRange(NSRange(location: min(sel.location, attr.length), length: 0))
+            tv.invalidateIntrinsicContentSize()
+        }
+
+        // Focus management: take first responder when we're the active cell.
+        if activeCell == cellID, tv.window?.firstResponder !== tv {
+            DispatchQueue.main.async { [weak tv] in
+                guard let tv, tv.window?.firstResponder !== tv else { return }
+                tv.window?.makeFirstResponder(tv)
+            }
+        }
+    }
+
+    private var typingAttributes: [NSAttributedString.Key: Any] {
+        [.font: baseFont, .foregroundColor: NSColor.textColor]
+    }
+
+    private func attributed(from md: String) -> NSAttributedString {
+        MarkdownCodec.inlineAttributed(md, baseFont: baseFont, color: .textColor)
+    }
+
+    // MARK: Coordinator
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: TableCellTextView
+        /// Last Markdown we pushed to / read from the model, so `updateNSView` can
+        /// tell our own edits apart from external changes.
+        var lastMarkdown: String = ""
+
+        init(_ parent: TableCellTextView) { self.parent = parent }
+
+        func focusChanged(_ tv: TableCellNSTextView, focused: Bool) {
+            if focused {
+                if parent.activeCell != parent.cellID { parent.activeCell = parent.cellID }
+            } else {
+                parent.formatBar.hide()
+            }
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? TableCellNSTextView,
+                  let storage = tv.textStorage else { return }
+            let md = MarkdownCodec.inlineMarkdown(from: storage, baseFont: parent.baseFont)
+            // `lastMarkdown` tracks what the view currently displays, so a later
+            // `updateNSView` only rebuilds (and moves the caret) on a *genuine*
+            // external change — not on the model value we're pushing right now.
+            lastMarkdown = md
+            parent.markdown = md
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = notification.object as? TableCellNSTextView else { return }
+            updateFormatBar(tv)
+        }
+
+        /// Tab / Shift+Tab move between cells instead of inserting a tab.
+        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertTab(_:)):
+                parent.onTab(true); return true
+            case #selector(NSResponder.insertBacktab(_:)):
+                parent.onTab(false); return true
+            default:
+                return false
+            }
+        }
+
+        /// Show the floating format bar above a non-empty selection; hide otherwise.
+        private func updateFormatBar(_ tv: TableCellNSTextView) {
+            let range = tv.selectedRange()
+            guard range.length > 0,
+                  tv.window?.firstResponder === tv,
+                  let lm = tv.layoutManager, let tc = tv.textContainer else {
+                parent.formatBar.hide()
+                return
+            }
+            let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+            let origin = tv.textContainerOrigin
+            rect.origin.x += origin.x
+            rect.origin.y += origin.y
+            let windowRect = tv.convert(rect, to: nil)
+            guard let screenRect = tv.window?.convertToScreen(windowRect) else {
+                parent.formatBar.hide()
+                return
+            }
+            parent.formatBar.show(textView: tv, atScreenRect: screenRect)
+        }
+    }
+}

@@ -87,6 +87,7 @@ struct BlockRowView: View {
         case .heading1: return 6
         case .heading2: return 4
         case .heading3: return 3
+        case .heading4, .heading5, .heading6: return 3
         case .code:     return 3
         case .table:    return 3
         case .image:    return 3
@@ -156,7 +157,7 @@ struct BlockRowView: View {
         case .table:
             // .disabled centrally blocks every mutation control inside (cells,
             // add/insert/delete rows and columns) in read-only mode.
-            TableBlockView(document: document, block: block)
+            TableBlockView(document: document, block: block, formatBar: formatBar)
                 .disabled(!config.isEditable)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -606,6 +607,7 @@ struct BlockRowView: View {
     // guard keeps it safe; keep detection cheap and side-effect-free here.
     private static let markdownShortcuts: [(String, BlockKind)] = [
         ("# ", .heading1), ("## ", .heading2), ("### ", .heading3),
+        ("#### ", .heading4), ("##### ", .heading5), ("###### ", .heading6),
         ("- ", .bulleted), ("* ", .bulleted), ("1. ", .numbered),
         ("[] ", .todo), ("[ ] ", .todo), ("> ", .quote), ("```", .code),
     ]

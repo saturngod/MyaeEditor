@@ -257,6 +257,10 @@ struct BlockTextView: NSViewRepresentable {
             para.lineHeightMultiple = 1.3
             para.paragraphSpacingBefore = 8
             para.paragraphSpacing = 2
+        case .heading4, .heading5, .heading6:
+            para.lineHeightMultiple = 1.3
+            para.paragraphSpacingBefore = 6
+            para.paragraphSpacing = 2
         case .code:
             para.lineHeightMultiple = 1.45
         case .quote:
@@ -526,9 +530,12 @@ struct BlockTextView: NSViewRepresentable {
 
 // MARK: - Auto-sizing NSTextView with placeholder
 
-final class AutoSizingTextView: NSTextView {
+class AutoSizingTextView: NSTextView {
     weak var coordinator: BlockTextView.Coordinator?
     var placeholder: String = ""
+    /// When set, this is the font inline-code removal restores to (instead of the
+    /// block kind's base font). Table cells set it because they have no block kind.
+    var baseFontOverride: NSFont?
 
     override var intrinsicContentSize: NSSize {
         guard let lm = layoutManager, let tc = textContainer else {
@@ -583,6 +590,12 @@ final class AutoSizingTextView: NSTextView {
     // selection when the pointer leaves this block (SwiftUI/monitors never see the
     // native NSTextView modal loop). Modified clicks fall back to the native path.
     override func mouseDown(with event: NSEvent) {
+        // Table cells have no coordinator and don't need block-selection escalation
+        // — use native NSTextView selection (click, drag, double/triple-click).
+        if coordinator == nil {
+            super.mouseDown(with: event)
+            return
+        }
         if event.clickCount == 2,
            let lm = layoutManager, let tc = textContainer, let storage = textStorage {
             let point = convert(event.locationInWindow, from: nil)
@@ -866,7 +879,7 @@ final class AutoSizingTextView: NSTextView {
         // The block kind's base font, NOT `self.font` — the latter reflects the
         // selection, which is already monospaced when removing inline code, so
         // "restoring" it would just re-apply the code font.
-        let base = coordinator?.parent.kind.baseFont ?? font ?? NSFont.systemFont(ofSize: 16)
+        let base = baseFontOverride ?? coordinator?.parent.kind.baseFont ?? font ?? NSFont.systemFont(ofSize: 16)
         storage.beginEditing()
         if adding {
             storage.addAttribute(.inlineCode, value: true, range: range)

@@ -58,6 +58,12 @@ enum MarkdownCodec {
                 lines.append(pad + "## " + inline(block))
             case .heading3:
                 lines.append(pad + "### " + inline(block))
+            case .heading4:
+                lines.append(pad + "#### " + inline(block))
+            case .heading5:
+                lines.append(pad + "##### " + inline(block))
+            case .heading6:
+                lines.append(pad + "###### " + inline(block))
             case .bulleted:
                 lines.append(pad + "- " + inline(block))
             case .numbered:
@@ -81,8 +87,15 @@ enum MarkdownCodec {
     /// bold/italic that go *beyond* the block's base font (so headings aren't
     /// wrapped in ** for their inherent weight).
     private static func inline(_ block: Block) -> String {
-        let attr = block.text
-        let base = NSFontManager.shared.traits(of: block.kind.baseFont)
+        inlineMarkdown(from: block.text, baseFont: block.kind.baseFont)
+    }
+
+    /// Encode an inline attributed string to Markdown relative to `baseFont`,
+    /// marking only the bold/italic that go *beyond* the base font (so a semibold
+    /// table header isn't wrapped in ** for its inherent weight). Reused by table
+    /// cells, which store their text as inline Markdown.
+    static func inlineMarkdown(from attr: NSAttributedString, baseFont: NSFont) -> String {
+        let base = NSFontManager.shared.traits(of: baseFont)
         let baseBold = base.contains(.boldFontMask)
         let baseItalic = base.contains(.italicFontMask)
 
@@ -284,7 +297,10 @@ enum MarkdownCodec {
             var kind: BlockKind = .paragraph
             var checked = false
 
-            if content.hasPrefix("### ") { kind = .heading3; content.removeFirst(4) }
+            if content.hasPrefix("###### ") { kind = .heading6; content.removeFirst(7) }
+            else if content.hasPrefix("##### ") { kind = .heading5; content.removeFirst(6) }
+            else if content.hasPrefix("#### ") { kind = .heading4; content.removeFirst(5) }
+            else if content.hasPrefix("### ") { kind = .heading3; content.removeFirst(4) }
             else if content.hasPrefix("## ") { kind = .heading2; content.removeFirst(3) }
             else if content.hasPrefix("# ") { kind = .heading1; content.removeFirst(2) }
             else if content.hasPrefix("> ") { kind = .quote; content.removeFirst(2) }
@@ -311,8 +327,17 @@ enum MarkdownCodec {
     /// Parse inline Markdown (**, *, ***) into an attributed string using the
     /// block kind's base font/color.
     private static func parseInline(_ md: String, kind: BlockKind) -> NSAttributedString {
-        let baseFont = kind.baseFont
-        let color: NSColor = (kind == .quote) ? .secondaryLabelColor : .textColor
+        inlineAttributed(md,
+                         baseFont: kind.baseFont,
+                         color: (kind == .quote) ? .secondaryLabelColor : .textColor,
+                         mathKind: kind)
+    }
+
+    /// Parse inline Markdown (**, *, ***, `code`, ~~, $math$) into an attributed
+    /// string using an explicit base font/color. `mathKind` styles inline-math
+    /// attachments. Reused by table cells (14pt base, semibold for headers).
+    static func inlineAttributed(_ md: String, baseFont: NSFont, color: NSColor,
+                                 mathKind: BlockKind = .paragraph) -> NSAttributedString {
         let result = NSMutableAttributedString()
         let chars = Array(md)
         var i = 0
@@ -338,7 +363,7 @@ enum MarkdownCodec {
                 var latex = ""
                 while j < chars.count && chars[j] != "$" { latex.append(chars[j]); j += 1 }
                 if j < chars.count {   // found the closing $
-                    result.append(InlineMath.attributedString(latex: latex, fontSize: baseFont.pointSize, kind: kind))
+                    result.append(InlineMath.attributedString(latex: latex, fontSize: baseFont.pointSize, kind: mathKind))
                     i = j + 1
                     continue
                 }

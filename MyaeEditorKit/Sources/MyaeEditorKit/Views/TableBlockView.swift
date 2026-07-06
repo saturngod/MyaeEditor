@@ -19,11 +19,15 @@ struct TableCellID: Hashable { let r: Int; let c: Int }
 struct TableBlockView: View {
     @Bindable var document: EditorDocument
     @Bindable var block: Block
+    /// Shared floating format toolbar (bold / italic / strike / code).
+    var formatBar: FormatBarController
 
     @State private var hovering = false
     @State private var hoveredRow: Int?
     @State private var hoveredColumn: Int?
-    @FocusState private var focusedCell: TableCellID?
+    /// The cell currently editing (drives the active-cell ring + Tab navigation).
+    /// Plain state, not @FocusState, because cells are NSTextView-backed.
+    @State private var activeCell: TableCellID?
     /// Width available to the grid (the horizontal scroll viewport width).
     @State private var availableWidth: CGFloat = 0
     /// Each row's frame (in the table coordinate space) so the pinned row
@@ -48,6 +52,16 @@ struct TableBlockView: View {
 
     /// Run a structural table change and signal the document for autosave.
     private func edit(_ change: () -> Void) { change(); document.markEdited() }
+
+    /// Tab / Shift+Tab focus movement: advance across the row, wrapping to the
+    /// next/previous row. Stops (stays put) at the first/last cell.
+    private func moveFocus(from id: TableCellID, forward: Bool, in table: TableData) {
+        let cols = table.columnCount, rows = table.rowCount
+        guard cols > 0, rows > 0 else { return }
+        var index = id.r * cols + id.c + (forward ? 1 : -1)
+        index = max(0, min(index, rows * cols - 1))
+        activeCell = TableCellID(r: index / cols, c: index % cols)
+    }
 
     var body: some View {
         if let table = block.table {
@@ -93,7 +107,7 @@ struct TableBlockView: View {
             .overlay(alignment: .topLeading) { rowHandleGutter(table) }
             // Reveal the focused cell when Tab/click moves focus off-screen.
             // `anchor: nil` scrolls the minimum needed, so visible cells don't move.
-            .onChange(of: focusedCell) { _, new in
+            .onChange(of: activeCell) { _, new in
                 guard let new else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(new, anchor: nil) }
             }
@@ -236,13 +250,15 @@ struct TableBlockView: View {
             text: text,
             r: r, c: c,
             isHeader: isHeader,
-            isFocused: focusedCell == TableCellID(r: r, c: c),
+            isFocused: activeCell == TableCellID(r: r, c: c),
             alignment: table.alignment(c),
             isLastRow: r == table.rowCount - 1,
             isLastCol: c == table.columnCount - 1,
             minHeight: rowMinHeight,
             borderWidth: borderWidth,
-            focus: $focusedCell,
+            formatBar: formatBar,
+            activeCell: $activeCell,
+            onTab: { forward in moveFocus(from: TableCellID(r: r, c: c), forward: forward, in: table) },
             setText: { new in
                 if table.cells.indices.contains(r), table.cells[r].indices.contains(c) {
                     table.cells[r][c] = new
@@ -326,7 +342,9 @@ struct TableCellView: View, Equatable {
     let isLastCol: Bool
     let minHeight: CGFloat
     let borderWidth: CGFloat
-    var focus: FocusState<TableCellID?>.Binding
+    var formatBar: FormatBarController
+    @Binding var activeCell: TableCellID?
+    let onTab: (_ forward: Bool) -> Void
     let setText: (String) -> Void
     let onHover: (Bool) -> Void
     let menu: TableCellMenu
@@ -345,27 +363,24 @@ struct TableCellView: View, Equatable {
         Binding(get: { text }, set: { setText($0) })
     }
 
-    private var frameAlignment: Alignment {
-        switch alignment {
-        case .right:  return .topTrailing
-        case .center: return .top
-        default:      return .topLeading
-        }
-    }
-
     var body: some View {
         ZStack(alignment: .topLeading) {
             if isHeader {
                 Color(nsColor: .unemphasizedSelectedContentBackgroundColor).opacity(0.5)
             }
-            TextField("", text: binding, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: isHeader ? .semibold : .regular))
-                .multilineTextAlignment(alignment.textAlignment)
-                .frame(maxWidth: .infinity, alignment: frameAlignment)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 7)
-                .focused(focus, equals: TableCellID(r: r, c: c))
+            // NSTextView-backed editor: same bold/italic/strike/inline-code support
+            // (Cmd+B/I/E, Cmd+Shift+S, and the floating format bar) as a paragraph
+            // block. Cell text is stored as inline Markdown.
+            TableCellTextView(
+                markdown: binding,
+                isHeader: isHeader,
+                alignment: alignment,
+                formatBar: formatBar,
+                cellID: TableCellID(r: r, c: c),
+                activeCell: $activeCell,
+                onTab: onTab
+            )
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         // maxHeight lets every cell stretch to the tallest cell in its row so the
