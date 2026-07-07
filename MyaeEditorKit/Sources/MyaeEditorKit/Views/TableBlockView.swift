@@ -17,10 +17,14 @@ import SwiftUI
 struct TableCellID: Hashable { let r: Int; let c: Int }
 
 struct TableBlockView: View {
-    @Bindable var document: EditorDocument
-    @Bindable var block: Block
+    /// The table model (owned by a segment's payload).
+    @Bindable var table: TableData
     /// Shared floating format toolbar (bold / italic / strike / code).
     var formatBar: FormatBarController
+    /// Signal that content changed (drives autosave).
+    var onEdited: () -> Void
+    /// Delete the whole table (removes its segment).
+    var onDelete: () -> Void
     /// Reports hover changes up to the enclosing row so its left-gutter controls
     /// (+ and drag handle) stay visible while the pointer is over the table's
     /// AppKit-backed cells — the row's own `.onHover` drops there.
@@ -46,7 +50,11 @@ struct TableBlockView: View {
 
     private let rowMinHeight: CGFloat = 32
     private let borderWidth: CGFloat = 0.5
-    private let handleInset: CGFloat = 14   // how far the row handle floats into the left gutter
+    // How far the row handle floats into the left gutter. The 11×22 pill is
+    // rotated 90°, so its *rendering* is 22 wide centered on the 11pt layout
+    // frame (±5.5pt overhang each side) — inset far enough that the rotated
+    // face clears the table's left border instead of overlaying the first cell.
+    private let handleInset: CGFloat = 24
     private let minColumnWidth: CGFloat = 120  // below this, the table scrolls instead of shrinking
     private let topBleed: CGFloat = 16      // vertical room the clip leaves for column handles above the grid
     private let rowHandleHeight: CGFloat = 22
@@ -59,7 +67,7 @@ struct TableBlockView: View {
     }
 
     /// Run a structural table change and signal the document for autosave.
-    private func edit(_ change: () -> Void) { change(); document.markEdited() }
+    private func edit(_ change: () -> Void) { change(); onEdited() }
 
     /// Tab / Shift+Tab focus movement: advance across the row, wrapping to the
     /// next/previous row. Stops (stays put) at the first/last cell.
@@ -72,20 +80,20 @@ struct TableBlockView: View {
     }
 
     var body: some View {
-        if let table = block.table {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top, spacing: 4) {
-                    scrollableGrid(table)
-                    addColumnButton(table).opacity(hovering ? 1 : 0)
-                }
-                addRowButton(table).opacity(hovering ? 1 : 0)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 4) {
+                scrollableGrid(table)
+                // Always clickable: kept faintly visible so it can't hide out from
+                // under the pointer as you reach for it.
+                addColumnButton(table).opacity(hovering ? 1 : 0.4)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onHover {
-                hovering = $0
-                onHoverChange?($0)
-                if $0 { keepHover() } else { scheduleClearHover() }
-            }
+            addRowButton(table).opacity(hovering ? 1 : 0.4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover {
+            hovering = $0
+            onHoverChange?($0)
+            if $0 { keepHover() } else { scheduleClearHover() }
         }
     }
 
@@ -190,7 +198,7 @@ struct TableBlockView: View {
                     }
                     Divider()
                     Button("Delete column", role: .destructive) { edit { table.deleteColumn(at: c) } }
-                    Button("Delete table", role: .destructive) { document.removeBlock(block) }
+                    Button("Delete table", role: .destructive) { onDelete() }
                 } label: {
                     ZStack {
                         RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.15))
@@ -250,7 +258,7 @@ struct TableBlockView: View {
             Button("Insert row below") { edit { table.insertRow(at: r + 1) } }
             Divider()
             Button("Delete row", role: .destructive) { edit { table.deleteRow(at: r) } }
-            Button("Delete table", role: .destructive) { document.removeBlock(block) }
+            Button("Delete table", role: .destructive) { onDelete() }
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.15))
@@ -292,7 +300,7 @@ struct TableBlockView: View {
             setText: { new in
                 if table.cells.indices.contains(r), table.cells[r].indices.contains(c) {
                     table.cells[r][c] = new
-                    document.markEdited()
+                    onEdited()
                 }
             },
             onHover: { if $0 { keepHover(); if hoveredRow != r { hoveredRow = r }; if hoveredColumn != c { hoveredColumn = c } } },
@@ -303,7 +311,7 @@ struct TableBlockView: View {
                 insertColumnRight: { edit { table.insertColumn(at: c + 1) } },
                 deleteRow: { edit { table.deleteRow(at: r) } },
                 deleteColumn: { edit { table.deleteColumn(at: c) } },
-                deleteTable: { document.removeBlock(block) }
+                deleteTable: { onDelete() }
             )
         )
         .equatable()

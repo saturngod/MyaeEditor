@@ -58,7 +58,7 @@ public struct MyaeEditor: View {
     public var body: some View {
         ZStack {
             if let controller {
-                EditorView(controller: controller, configuration: configuration)
+                SegmentEditorView(controller: controller, configuration: configuration)
                     .focusedSceneValue(\.myaeEditor, controller)
                     .modifier(BindingSyncModifier(controller: controller,
                                                   markdown: markdownBinding,

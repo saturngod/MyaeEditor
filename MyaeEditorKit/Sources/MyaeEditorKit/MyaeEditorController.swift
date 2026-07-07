@@ -75,7 +75,7 @@ public final class MyaeEditorController {
     /// replaces the blocks (normalizing via a re-encode); it does not touch
     /// `fileURL`.
     public var markdown: String {
-        get { MarkdownCodec.encode(document) }
+        get { SegmentCodec.encode(document.segments) }
         set { loadContent(newValue) }
     }
 
@@ -97,8 +97,8 @@ public final class MyaeEditorController {
 
     // MARK: Internal state
 
-    /// The live document model. Internal — blocks are not part of the API.
-    let document: EditorDocument
+    /// The live document model. Internal — segments are not part of the API.
+    let document: SegmentDocument
     /// The encoded content last written to disk (or last loaded). Drives the
     /// "did it actually change?" check so autosave doesn't rewrite unchanged text.
     var lastSaved: String
@@ -111,7 +111,7 @@ public final class MyaeEditorController {
     /// A new, blank document.
     public init(autosave: AutosavePolicy = .disabled) {
         self.autosave = autosave
-        self.document = EditorDocument(blocks: MyaeEditorController.blankBlocks())
+        self.document = SegmentDocument(segments: MyaeEditorController.blankSegments())
         self.lastSaved = ""
         self.fileURL = nil
         self.documentTitle = ""
@@ -122,14 +122,14 @@ public final class MyaeEditorController {
     /// A document initialized from Markdown text (no file binding).
     public init(markdown: String, autosave: AutosavePolicy = .disabled) {
         self.autosave = autosave
-        self.document = EditorDocument(blocks: MarkdownCodec.decode(markdown))
+        self.document = SegmentDocument(segments: SegmentCodec.decode(markdown))
         self.lastSaved = markdown
         self.fileURL = nil
         self.documentTitle = ""
         configureImageBase()
         // Normalize lastSaved to the encoded form so autosave doesn't immediately
         // rewrite a semantically-identical file.
-        self.lastSaved = MarkdownCodec.encode(document)
+        self.lastSaved = SegmentCodec.encode(document.segments)
         armAutosave()
     }
 
@@ -138,7 +138,7 @@ public final class MyaeEditorController {
     public init(contentsOf url: URL, autosave: AutosavePolicy = .disabled) throws {
         self.autosave = autosave
         let text = try String(contentsOf: url, encoding: .utf8)
-        self.document = EditorDocument(blocks: MarkdownCodec.decode(text))
+        self.document = SegmentDocument(segments: SegmentCodec.decode(text))
         self.lastSaved = text
         self.fileURL = url
         self.documentTitle = url.deletingPathExtension().lastPathComponent
@@ -151,7 +151,7 @@ public final class MyaeEditorController {
     public init?(restoringFrom store: MarkdownStore, autosave: AutosavePolicy = .default) {
         guard let markdown = store.loadMarkdown() else { return nil }
         self.autosave = autosave
-        self.document = EditorDocument(blocks: MarkdownCodec.decode(markdown))
+        self.document = SegmentDocument(segments: SegmentCodec.decode(markdown))
         self.lastSaved = markdown
         self.fileURL = nil
         self.documentTitle = store.loadTitle()
@@ -170,9 +170,7 @@ public final class MyaeEditorController {
     /// Reset to an empty document, dropping the file binding.
     public func newDocument() {
         fileURL = nil
-        document.blocks = MyaeEditorController.blankBlocks()
-        document.clearSelection()
-        document.focusedBlockID = document.blocks.first?.id
+        document.replaceAll(MyaeEditorController.blankSegments())
         configureImageBase()
         lastSaved = ""
         setTitle(programmatic: "")
@@ -184,9 +182,7 @@ public final class MyaeEditorController {
         let text = try String(contentsOf: url, encoding: .utf8)
         fileURL = url
         document.imageFileDirectory = url.deletingLastPathComponent()   // before decode → images resolve
-        document.blocks = MarkdownCodec.decode(text)
-        document.clearSelection()
-        document.focusedBlockID = document.blocks.first?.id
+        document.replaceAll(SegmentCodec.decode(text))
         lastSaved = text
         setTitle(programmatic: url.deletingPathExtension().lastPathComponent)
         setDirty(false)
@@ -211,7 +207,7 @@ public final class MyaeEditorController {
     /// `false` (and leaves the document dirty and unbound) when the write fails.
     @discardableResult
     public func save(to url: URL) -> Bool {
-        let markdown = MarkdownCodec.encode(document)
+        let markdown = SegmentCodec.encode(document.segments)
         // Through the serial queue so an older queued autosave can never land
         // after (and overwrite) this newer manual save.
         var ok = false
@@ -302,7 +298,7 @@ public final class MyaeEditorController {
     /// changed. `encode` reads the live `@Observable` blocks, so it runs on the
     /// main actor; only the write is handed to `saveQueue`.
     private func editsSettled(synchronous: Bool = false) {
-        let markdown = MarkdownCodec.encode(document)
+        let markdown = SegmentCodec.encode(document.segments)
         onChange?(self)
         guard markdown != lastSaved else {
             setDirty(false)   // edits round-tripped back to the saved text
@@ -351,10 +347,8 @@ public final class MyaeEditorController {
     // MARK: Content loading (binding form)
 
     private func loadContent(_ markdown: String) {
-        document.blocks = MarkdownCodec.decode(markdown)
-        document.clearSelection()
-        document.focusedBlockID = document.blocks.first?.id
-        lastSaved = MarkdownCodec.encode(document)
+        document.replaceAll(SegmentCodec.decode(markdown))
+        lastSaved = SegmentCodec.encode(document.segments)
         setDirty(false)
     }
 
@@ -390,11 +384,8 @@ public final class MyaeEditorController {
 
     // MARK: Helpers
 
-    /// A fresh, empty document: a single blank paragraph the caret can land in.
-    static func blankBlocks() -> [Block] {
-        [Block(kind: .paragraph,
-               text: NSAttributedString(
-                string: "",
-                attributes: BlockTextView.typingAttributes(for: .paragraph)))]
+    /// A fresh, empty document: a single blank text segment the caret can land in.
+    static func blankSegments() -> [Segment] {
+        [Segment.emptyText()]
     }
 }

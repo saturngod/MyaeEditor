@@ -149,6 +149,11 @@ struct TableCellTextView: NSViewRepresentable {
                 if parent.activeCell != parent.cellID { parent.activeCell = parent.cellID }
             } else {
                 parent.formatBar.hide()
+                // Drop the active-cell ring when focus leaves. AppKit resigns the
+                // old responder *before* the new one becomes first responder, so if
+                // focus moved to another cell it will re-set `activeCell` right
+                // after — clearing only when we still own it is safe.
+                if parent.activeCell == parent.cellID { parent.activeCell = nil }
             }
         }
 

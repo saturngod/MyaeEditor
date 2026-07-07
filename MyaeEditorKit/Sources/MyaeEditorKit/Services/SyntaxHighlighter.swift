@@ -25,6 +25,16 @@ enum CodeLanguage: String, CaseIterable, Identifiable, Codable {
         case "kt", "kts", "kotlin": return .kotlin
         case "php", "php3", "php4", "php5": return .php
         case "mermaid", "mmd": return .mermaid
+        case "js", "jsx", "node": return .javascript
+        case "ts", "tsx": return .typescript
+        case "py", "python3": return .python
+        case "rb": return .ruby
+        case "rs": return .rust
+        case "sh", "shell", "zsh", "bash": return .bash
+        case "yml", "yaml": return .yaml
+        case "c++", "cc", "cxx": return .cpp
+        case "objc", "h": return .c
+        case "golang": return .go
         default: return CodeLanguage(rawValue: info) ?? .plain
         }
     }

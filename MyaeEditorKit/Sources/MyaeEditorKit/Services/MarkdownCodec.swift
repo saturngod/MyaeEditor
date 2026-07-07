@@ -10,86 +10,6 @@ import AppKit
 
 enum MarkdownCodec {
 
-    private static let indentUnit = "    "   // 4 spaces per nesting level
-
-    // MARK: Encode
-
-    static func encode(_ document: EditorDocument) -> String {
-        var lines: [String] = []
-        // Running ordinal per depth for numbered lists. Advancing this in the
-        // single encode pass replaces the per-block O(n) `document.number(for:)`
-        // scan (which made encoding O(n²)). Mirrors `number(for:)` semantics:
-        // deeper items are skipped (don't reset a parent run); a shallower block
-        // or a non-numbered sibling ends the run at that depth (and deeper).
-        var counters: [Int: Int] = [:]
-        for block in document.blocks {
-            let pad = String(repeating: indentUnit, count: block.depth)
-            let depth = block.depth
-            // Any block ends numbered runs nested deeper than itself.
-            counters = counters.filter { $0.key <= depth }
-            if block.kind == .numbered {
-                counters[depth] = (counters[depth] ?? 0) + 1
-            } else {
-                // A non-numbered block at this depth also ends the run here.
-                counters[depth] = nil
-            }
-            switch block.kind {
-            case .divider:
-                lines.append("---")
-            case .image:
-                if let path = block.imagePath { lines.append("![](\(path))") }
-            case .table:
-                guard let t = block.table, t.rowCount > 0 else { break }
-                for (idx, row) in t.cells.enumerated() {
-                    lines.append("| " + row.map(escapeCell).joined(separator: " | ") + " |")
-                    if idx == 0 {
-                        let seps = (0 ..< row.count).map { separatorCell(t.alignment($0)) }
-                        lines.append("| " + seps.joined(separator: " | ") + " |")
-                    }
-                }
-            case .code:
-                let lang = block.language == .plain ? "" : block.language.rawValue
-                lines.append("```\(lang)")
-                lines.append(contentsOf: block.plainText.components(separatedBy: "\n"))
-                lines.append("```")
-            case .heading1:
-                lines.append(pad + "# " + inline(block))
-            case .heading2:
-                lines.append(pad + "## " + inline(block))
-            case .heading3:
-                lines.append(pad + "### " + inline(block))
-            case .heading4:
-                lines.append(pad + "#### " + inline(block))
-            case .heading5:
-                lines.append(pad + "##### " + inline(block))
-            case .heading6:
-                lines.append(pad + "###### " + inline(block))
-            case .bulleted:
-                lines.append(pad + "- " + inline(block))
-            case .numbered:
-                lines.append(pad + "\(counters[depth] ?? 1). " + inline(block))
-            case .todo:
-                lines.append(pad + "- [\(block.checked ? "x" : " ")] " + inline(block))
-            case .quote:
-                lines.append(pad + "> " + inline(block))
-            case .paragraph:
-                lines.append(pad + inline(block))
-            case .equation:
-                lines.append("$$" + block.plainText + "$$")
-            case .inlineMath:
-                break   // pseudo-kind; never an actual block
-            }
-        }
-        return lines.joined(separator: "\n")
-    }
-
-    /// Convert a block's attributed text to inline Markdown, marking only the
-    /// bold/italic that go *beyond* the block's base font (so headings aren't
-    /// wrapped in ** for their inherent weight).
-    private static func inline(_ block: Block) -> String {
-        inlineMarkdown(from: block.text, baseFont: block.kind.baseFont)
-    }
-
     /// Encode an inline attributed string to Markdown relative to `baseFont`,
     /// marking only the bold/italic that go *beyond* the base font (so a semibold
     /// table header isn't wrapped in ** for its inherent weight). Reused by table
@@ -119,10 +39,36 @@ enum MarkdownCodec {
             let emph = bold && italic ? "***" : bold ? "**" : italic ? "*" : ""
             let strikeMark = strike ? "~~" : ""
             let raw = attr.attributedSubstring(from: range).string
+            // Inline link → [text](url), with emphasis/strike still wrapping it.
+            if let url = attrs[.myaeLink] as? URL {
+                out += strikeMark + emph + "[" + escape(raw) + "](" + url.absoluteString + ")" + emph + strikeMark
+                return
+            }
             // Order: ~~ outside, emphasis inside.
             out += strikeMark + emph + escape(raw) + emph + strikeMark
         }
         return out
+    }
+
+    /// Parse a `[text](url)` link starting at `chars[start]` (which must be `[`).
+    /// Returns the visible text, the URL, and the index just past the closing `)`.
+    /// Backslash-escapes inside the text are honored; nested brackets are not.
+    static func parseLink(_ chars: [Character], from start: Int)
+        -> (text: String, url: URL, next: Int)? {
+        guard start < chars.count, chars[start] == "[" else { return nil }
+        var i = start + 1
+        var text = ""
+        while i < chars.count, chars[i] != "]" {
+            if chars[i] == "\\", i + 1 < chars.count { text.append(chars[i + 1]); i += 2; continue }
+            text.append(chars[i]); i += 1
+        }
+        guard i < chars.count, chars[i] == "]", i + 1 < chars.count, chars[i + 1] == "(" else { return nil }
+        i += 2
+        var urlString = ""
+        while i < chars.count, chars[i] != ")" { urlString.append(chars[i]); i += 1 }
+        guard i < chars.count, chars[i] == ")", !urlString.isEmpty,
+              let url = URL(string: urlString) else { return nil }
+        return (text, url, i + 1)
     }
 
     /// Backslash-escape Markdown metacharacters in a single pass (one scan instead
@@ -150,7 +96,7 @@ enum MarkdownCodec {
     }
 
     /// The GFM separator cell for a column alignment.
-    private static func separatorCell(_ a: ColumnAlignment) -> String {
+    static func separatorCell(_ a: ColumnAlignment) -> String {
         switch a {
         case .left:   return ":---"
         case .center: return ":---:"
@@ -160,7 +106,7 @@ enum MarkdownCodec {
     }
 
     /// The alignment encoded by a single separator cell (`:---:` etc.).
-    private static func alignment(ofSeparatorCell cell: String) -> ColumnAlignment {
+    static func alignment(ofSeparatorCell cell: String) -> ColumnAlignment {
         let c = cell.trimmingCharacters(in: .whitespaces)
         let left = c.hasPrefix(":"), right = c.hasSuffix(":")
         switch (left, right) {
@@ -172,7 +118,7 @@ enum MarkdownCodec {
     }
 
     /// A GFM separator row: every cell is dashes (optionally colon-aligned).
-    private static func isSeparatorRow(_ line: String) -> Bool {
+    static func isSeparatorRow(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         guard t.hasPrefix("|") else { return false }
         let cells = parseRow(t)
@@ -183,7 +129,7 @@ enum MarkdownCodec {
         }
     }
 
-    private static func parseRow(_ line: String) -> [String] {
+    static func parseRow(_ line: String) -> [String] {
         var s = line.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("|") { s.removeFirst() }
         if s.hasSuffix("|") { s.removeLast() }
@@ -202,7 +148,7 @@ enum MarkdownCodec {
         return cells.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
-    private static func normalize(_ row: [String], to count: Int) -> [String] {
+    static func normalize(_ row: [String], to count: Int) -> [String] {
         if row.count == count { return row }
         if row.count > count { return Array(row.prefix(count)) }
         return row + Array(repeating: "", count: count - row.count)
@@ -212,126 +158,8 @@ enum MarkdownCodec {
 
     /// Compiled once and reused — NSRegularExpression compilation isn't free, and
     /// decode checks these against every line of the document.
-    private static let imageLineRegex = try? NSRegularExpression(pattern: #"^!\[[^\]]*\]\((.+)\)$"#)
-    private static let numberedPrefixRegex = try? NSRegularExpression(pattern: #"^\d+\.\s"#)
-
-    /// Decode pasteboard text into blocks. Normalizes CRLF/CR to LF and strips
-    /// trailing newlines (browser/terminal copies commonly append them; they'd
-    /// otherwise decode into trailing empty paragraphs).
-    static func decodeForPaste(_ raw: String) -> [Block] {
-        var s = raw.replacingOccurrences(of: "\r\n", with: "\n")
-                   .replacingOccurrences(of: "\r", with: "\n")
-        while s.hasSuffix("\n") { s.removeLast() }
-        return decode(s)
-    }
-
-    static func decode(_ markdown: String) -> [Block] {
-        var blocks: [Block] = []
-        let lines = markdown.components(separatedBy: "\n")
-        var i = 0
-
-        while i < lines.count {
-            let line = lines[i]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            // Fenced code block.
-            if trimmed.hasPrefix("```") {
-                let info = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces).lowercased()
-                let language = CodeLanguage.resolve(info)
-                var code: [String] = []
-                i += 1
-                while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                    code.append(lines[i]); i += 1
-                }
-                i += 1   // skip closing fence
-                let text = NSAttributedString(string: code.joined(separator: "\n"),
-                                              attributes: BlockTextView.typingAttributes(for: .code))
-                blocks.append(Block(kind: .code, text: text, language: language))
-                continue
-            }
-
-            // Block equation: $$ ... $$ on one line.
-            if trimmed.hasPrefix("$$"), trimmed.hasSuffix("$$"), trimmed.count >= 4 {
-                let latex = String(trimmed.dropFirst(2).dropLast(2))
-                blocks.append(Block(kind: .equation, text: NSAttributedString(string: latex)))
-                i += 1; continue
-            }
-
-            // Divider.
-            if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-                blocks.append(Block(kind: .divider))
-                i += 1; continue
-            }
-
-            // Image: ![alt](path)
-            if let regex = imageLineRegex,
-               let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
-               let pathRange = Range(match.range(at: 1), in: trimmed) {
-                let path = String(trimmed[pathRange])
-                blocks.append(Block(kind: .image, imagePath: path.isEmpty ? nil : path))
-                i += 1; continue
-            }
-
-            // Table: a "| ... |" row followed by a separator row.
-            if trimmed.hasPrefix("|"), i + 1 < lines.count, isSeparatorRow(lines[i + 1]) {
-                let header = parseRow(trimmed)
-                let alignments = normalize(parseRow(lines[i + 1]), to: header.count)
-                    .map { alignment(ofSeparatorCell: $0) }
-                var rows: [[String]] = [header]
-                i += 2   // skip header + separator
-                while i < lines.count {
-                    let t = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard t.hasPrefix("|"), !isSeparatorRow(lines[i]) else { break }
-                    rows.append(normalize(parseRow(t), to: header.count))
-                    i += 1
-                }
-                blocks.append(Block(kind: .table, table: TableData(cells: rows, alignments: alignments)))
-                continue
-            }
-
-            // Depth from leading spaces (4 per level).
-            let leadingSpaces = line.prefix { $0 == " " }.count
-            let depth = leadingSpaces / 4
-            var content = String(line.dropFirst(depth * 4)).drop { $0 == " " }.description
-
-            var kind: BlockKind = .paragraph
-            var checked = false
-
-            if content.hasPrefix("###### ") { kind = .heading6; content.removeFirst(7) }
-            else if content.hasPrefix("##### ") { kind = .heading5; content.removeFirst(6) }
-            else if content.hasPrefix("#### ") { kind = .heading4; content.removeFirst(5) }
-            else if content.hasPrefix("### ") { kind = .heading3; content.removeFirst(4) }
-            else if content.hasPrefix("## ") { kind = .heading2; content.removeFirst(3) }
-            else if content.hasPrefix("# ") { kind = .heading1; content.removeFirst(2) }
-            else if content.hasPrefix("> ") { kind = .quote; content.removeFirst(2) }
-            else if content.hasPrefix("- [ ] ") { kind = .todo; checked = false; content.removeFirst(6) }
-            else if content.hasPrefix("- [x] ") || content.hasPrefix("- [X] ") { kind = .todo; checked = true; content.removeFirst(6) }
-            else if content.hasPrefix("- ") || content.hasPrefix("* ") || content.hasPrefix("+ ") { kind = .bulleted; content.removeFirst(2) }
-            else if let re = numberedPrefixRegex,
-                    let m = re.firstMatch(in: content, range: NSRange(content.startIndex..., in: content)),
-                    let r = Range(m.range, in: content) {
-                kind = .numbered; content.removeSubrange(r)
-            }
-
-            let block = Block(kind: kind,
-                              text: parseInline(content, kind: kind),
-                              checked: checked,
-                              depth: depth)
-            blocks.append(block)
-            i += 1
-        }
-
-        return blocks.isEmpty ? [Block()] : blocks
-    }
-
-    /// Parse inline Markdown (**, *, ***) into an attributed string using the
-    /// block kind's base font/color.
-    private static func parseInline(_ md: String, kind: BlockKind) -> NSAttributedString {
-        inlineAttributed(md,
-                         baseFont: kind.baseFont,
-                         color: (kind == .quote) ? .secondaryLabelColor : .textColor,
-                         mathKind: kind)
-    }
+    static let imageLineRegex = try? NSRegularExpression(pattern: #"^!\[[^\]]*\]\((.+)\)$"#)
+    static let numberedPrefixRegex = try? NSRegularExpression(pattern: #"^\d+\.\s"#)
 
     /// Parse inline Markdown (**, *, ***, `code`, ~~, $math$) into an attributed
     /// string using an explicit base font/color. `mathKind` styles inline-math
@@ -354,9 +182,27 @@ enum MarkdownCodec {
             if strike { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             result.append(NSAttributedString(string: s, attributes: attrs))
         }
+        /// Append `text` as a link to `url` (link color + underline), honoring the
+        /// current emphasis/strike toggles.
+        func appendLink(_ text: String, url: URL) {
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: currentFont(),
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .myaeLink: url,
+            ]
+            if strike { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            result.append(NSAttributedString(string: text, attributes: attrs))
+        }
 
         while i < chars.count {
             let c = chars[i]
+            // Inline link: [text](url)
+            if c == "[", let link = Self.parseLink(chars, from: i) {
+                appendLink(link.text, url: link.url)
+                i = link.next
+                continue
+            }
             // Inline math: $...$
             if c == "$" {
                 var j = i + 1
