@@ -97,6 +97,7 @@ struct SegmentTextView: NSViewRepresentable {
         tv.placeholder = "Type '/' for commands"
         // Attach the shared storage: edits land straight in the segment's model.
         tv.layoutManager?.replaceTextStorage(storage)
+        tv.layoutManager?.delegate = tv   // vertical centering within line spacing
         tv.typingAttributes = SegmentStyle.attributes(for: .paragraph)
         tv.unregisterDraggedTypes()
         return tv
@@ -933,7 +934,12 @@ final class SegmentNSTextView: AutoSizingTextView {
             case .bulleted, .numbered, .todo, .quote: break
             default: continue
             }
-            let lineRect = firstLineUsedRect(forParagraphAt: pStart, lm: lm)
+            var lineRect = firstLineUsedRect(forParagraphAt: pStart, lm: lm)
+            // Glyphs are nudged down by half the line spacing to center them in the
+            // line (see `AutoSizingTextView`'s layout-manager delegate). Markers read
+            // the unshifted used rect, so add the same shift to keep them on the text.
+            let shift = BlockTextView.centeringShift(for: pk.kind)
+            lineRect.origin.y += shift
             let indentX = origin.x + CGFloat(pk.depth) * SegmentStyle.indentPerLevel
             let font = pk.kind.baseFont
 
@@ -945,7 +951,7 @@ final class SegmentNSTextView: AutoSizingTextView {
                                              actualCharacterRange: nil)
                     barRect = lm.boundingRect(forGlyphRange: full, in: tc)
                     barRect.origin.x += origin.x
-                    barRect.origin.y += origin.y
+                    barRect.origin.y += origin.y + shift
                 }
                 let bar = NSRect(x: indentX + 2, y: barRect.minY, width: 3, height: max(barRect.height, lineRect.height))
                 NSColor.separatorColor.setFill()
@@ -975,7 +981,7 @@ final class SegmentNSTextView: AutoSizingTextView {
                     lm.enumerateLineFragments(forGlyphRange: gr) { _, usedRect, _, _, _ in
                         var ur = usedRect
                         ur.origin.x += origin.x
-                        ur.origin.y += origin.y
+                        ur.origin.y += origin.y + shift
                         let p = NSBezierPath()
                         p.move(to: NSPoint(x: ur.minX, y: ur.midY))
                         p.line(to: NSPoint(x: ur.maxX, y: ur.midY))

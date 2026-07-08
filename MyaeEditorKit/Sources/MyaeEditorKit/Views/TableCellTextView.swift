@@ -119,6 +119,7 @@ struct TableCellTextView: NSViewRepresentable {
         tv.baseFontOverride = baseFont
         tv.alignment = alignment.nsTextAlignment
         tv.cellFormatBar = formatBar
+        tv.layoutManager?.delegate = tv   // vertical centering within line spacing
         tv.typingAttributes = typingAttributes
         tv.textStorage?.setAttributedString(attributed(from: markdown))
         let coordinator = context.coordinator
@@ -171,12 +172,27 @@ struct TableCellTextView: NSViewRepresentable {
         }
     }
 
+    /// Match the main editor's paragraph line spacing so a wrapped cell reads the
+    /// same as a wrapped paragraph. Carries the column alignment too, since setting
+    /// the attributed string would otherwise clobber the view's `alignment`.
+    private var cellParagraphStyle: NSParagraphStyle {
+        let para = NSMutableParagraphStyle()
+        para.lineSpacing = 10
+        para.alignment = alignment.nsTextAlignment
+        return para
+    }
+
     private var typingAttributes: [NSAttributedString.Key: Any] {
-        [.font: baseFont, .foregroundColor: NSColor.textColor]
+        [.font: baseFont, .foregroundColor: NSColor.textColor,
+         .paragraphStyle: cellParagraphStyle]
     }
 
     private func attributed(from md: String) -> NSAttributedString {
-        MarkdownCodec.inlineAttributed(md, baseFont: baseFont, color: .textColor)
+        let attr = NSMutableAttributedString(
+            attributedString: MarkdownCodec.inlineAttributed(md, baseFont: baseFont, color: .textColor))
+        attr.addAttribute(.paragraphStyle, value: cellParagraphStyle,
+                          range: NSRange(location: 0, length: attr.length))
+        return attr
     }
 
     // MARK: Coordinator

@@ -77,7 +77,7 @@ enum BlockTextView {
             // lineSpacing (gap *between* lines) instead of lineHeightMultiple
             // (which adds leading *above* the first line and would drop the text
             // below its list bullet / checkbox). This keeps markers aligned.
-            para.lineSpacing = 6
+            para.lineSpacing = 10
             para.paragraphSpacing = 2
         }
         var color: NSColor = .textColor
@@ -90,11 +90,20 @@ enum BlockTextView {
         typingAttributesCache[kind] = attrs
         return attrs
     }
+
+    /// Half of a paragraph's `lineSpacing` — the amount its glyphs are nudged down
+    /// so they sit centered in the (taller) line instead of pinned to the top.
+    /// Marker/pill drawing adds this back because they measure from the unshifted
+    /// layout rects. Zero for kinds that don't use `lineSpacing` (headings/code).
+    static func centeringShift(for kind: BlockKind) -> CGFloat {
+        let para = typingAttributes(for: kind)[.paragraphStyle] as? NSParagraphStyle
+        return (para?.lineSpacing ?? 0) / 2
+    }
 }
 
 // MARK: - Auto-sizing NSTextView with placeholder + inline-format toggles
 
-class AutoSizingTextView: NSTextView {
+class AutoSizingTextView: NSTextView, NSLayoutManagerDelegate {
     var placeholder: String = ""
     /// When set, this is the font inline-code removal restores to (instead of
     /// `restoreBaseFont()`'s default). Table cells set it because they have no
@@ -164,19 +173,34 @@ class AutoSizingTextView: NSTextView {
             // indent — clamp it to this edge.
             let para = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
             let blockLeft = origin.x + tc.lineFragmentPadding + (para?.headIndent ?? 0)
+            // Glyphs are nudged down by half the line spacing to center them (see the
+            // layout-manager delegate); the pill measures from the unshifted used
+            // rect, so add the same shift to stay glued to the code.
+            let centeringShift = (para?.lineSpacing ?? 0) / 2
             let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            // One rounded rect per line fragment the run spans.
-            lm.enumerateEnclosingRects(forGlyphRange: glyphRange,
-                                       withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
-                                       in: tc) { r, _ in
-                var box = r.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -inset, dy: 0)
+            // One rounded rect per line fragment the run spans. Walk line fragments
+            // (not `enumerateEnclosingRects`, whose selection-style rects include the
+            // paragraph's trailing `lineSpacing` and would drag the pill off-glyph as
+            // line spacing grows) and take each fragment's tight `usedRect` for the
+            // vertical extent, with the run's own glyphs for the horizontal extent.
+            // The text's real line height, WITHOUT the paragraph's trailing
+            // `lineSpacing` — the used rect includes that spacing below the glyphs,
+            // so centering in it would push the pill down as line spacing grows.
+            let lineHeight = lm.defaultLineHeight(for: font)
+            lm.enumerateLineFragments(forGlyphRange: glyphRange) { _, usedRect, _, effectiveGlyphRange, _ in
+                let lineGlyphRange = NSIntersectionRange(effectiveGlyphRange, glyphRange)
+                guard lineGlyphRange.length > 0 else { return }
+                let horizontal = lm.boundingRect(forGlyphRange: lineGlyphRange, in: tc)
+                var box = NSRect(x: horizontal.minX, y: usedRect.minY, width: horizontal.width, height: lineHeight)
+                box = box.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -inset, dy: 0)
                 // Keep the fill within the paragraph's text block.
                 if box.minX < blockLeft {
                     box.size.width -= (blockLeft - box.minX)
                     box.origin.x = blockLeft
                 }
-                // Center a text-height pill within the line fragment.
-                box.origin.y += (box.height - textHeight) / 2
+                // Center a text-height pill within the glyphs' line height, then drop
+                // it to match the centered glyphs.
+                box.origin.y += (box.height - textHeight) / 2 + centeringShift
                 box.size.height = textHeight
                 guard box.intersects(clip) else { return }
                 let path = NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius)
@@ -221,6 +245,39 @@ class AutoSizingTextView: NSTextView {
         let ok = super.resignFirstResponder()
         needsDisplay = true   // hide placeholder on blur
         return ok
+    }
+
+    // MARK: Vertical centering within line spacing
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil, let lm = layoutManager, lm.delegate !== self else { return }
+        lm.delegate = self
+        lm.invalidateLayout(forCharacterRange: NSRange(location: 0, length: textStorage?.length ?? 0),
+                            actualCharacterRange: nil)
+    }
+
+    /// Drop each glyph line by half its paragraph's `lineSpacing`. AppKit piles that
+    /// spacing *below* the glyphs, pinning text to the top of the (tall) line and
+    /// making it read as top-aligned against the full-height caret. Nudging only the
+    /// baseline centers the drawn text within the line — and within the caret —
+    /// while leaving every layout metric (so the caret keeps its width, height, and
+    /// top position, with no erase artifacts). List markers and inline-code pills
+    /// compensate with the same shift when they draw. Only lines that set
+    /// `lineSpacing` are touched; headings/code use `lineHeightMultiple`.
+    func layoutManager(_ layoutManager: NSLayoutManager,
+                       shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+                       lineFragmentUsedRect: UnsafeMutablePointer<NSRect>,
+                       baselineOffset: UnsafeMutablePointer<CGFloat>,
+                       in textContainer: NSTextContainer,
+                       forGlyphRange glyphRange: NSRange) -> Bool {
+        guard let storage = layoutManager.textStorage, storage.length > 0 else { return false }
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphRange.location)
+        let idx = min(max(charIndex, 0), storage.length - 1)
+        guard let para = storage.attribute(.paragraphStyle, at: idx, effectiveRange: nil) as? NSParagraphStyle,
+              para.lineSpacing > 0 else { return false }
+        baselineOffset.pointee += para.lineSpacing / 2
+        return true
     }
 
     // MARK: Paste

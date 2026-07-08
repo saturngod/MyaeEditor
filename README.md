@@ -1,29 +1,36 @@
 # MyaeEditor
 
-A native macOS block editor made with SwiftUI. You write in
-blocks — headings, lists, to-dos, tables, code, math — and save the file as
-Markdown.
+A native macOS **continuous** editor made with SwiftUI. You write in one
+flowing document — headings, lists, to-dos, tables, code, math, diagrams — and
+save the file as Markdown.
 
 ![](./screenshot.png)
 
 ## Features
 
-- **Block-based editing** — paragraphs, H1–H3 headings, bullet / numbered /
-  to-do lists, quotes, dividers.
-- **Slash menu** — type `/` to add any block type.
-- **Floating format bar** — select text to make it bold, italic, strikethrough,
-  or inline code.
+- **Continuous WYSIWYG editing** — the whole document is one scrolling text
+  surface, not discrete block rows. Headings, lists, to-dos, and quotes are
+  just styled paragraphs you type straight into; press Enter to continue a
+  list, Backspace at the start of a line to merge it into the one above.
+- **Rich inline formatting** — bold, italic, strikethrough, inline code, and
+  inline links, plus a floating format bar that appears over a selection.
+- **Slash menu** — type `/` to insert a heading, list, to-do, quote, code
+  block, table, image, divider, or equation.
+- **Inline & block math** — type `/` for a display equation or insert inline
+  math like `$E = mc^2$`, edited live in a popover (rendered like LaTeX).
 - **Code blocks** — syntax highlighting for Swift, Python, JavaScript,
   TypeScript, JSON, HTML, CSS, Shell, Go, Rust, C, C++, C#, Java, Kotlin, PHP,
   Ruby, SQL, YAML.
 - **Mermaid diagrams** — set a code block's language to Mermaid to render it
-  live as a diagram.
-- **Tables** — add or remove rows and columns, and set per-column alignment
-  (left/center/right), with a right-click menu on each cell.
-- **Math** — inline math and math blocks (rendered like LaTeX).
-- **Images** — add images as blocks.
-- **Drag to reorder** — grab a block and move it; select many blocks at once
-  by dragging over them.
+  live as a diagram, with a full-size zoomable/pannable viewer sheet.
+- **Tables** — add or remove rows and columns, per-column alignment
+  (left/center/right), with a right-click menu on each cell; wide tables break
+  out of the text column instead of clipping.
+- **Images** — insert images inline; relative paths are resolved against the
+  Markdown file's folder.
+- **Whole-document selection** — drag or `⌘A` to select multiple
+  tables/images/code blocks/etc. at once, then copy/cut/delete/paste as
+  Markdown.
 - **Markdown files** — Open (`⌘O`), Save (`⌘S`), Save As Markdown (`⇧⌘S`).
 
 ## Requirements
@@ -64,18 +71,22 @@ MyaeEditorKit/                 (local Swift package)
 │   ├── MyaeEditorController.swift ← PUBLIC: document + file I/O
 │   ├── MyaeEditorConfiguration.swift ← PUBLIC: feature flags
 │   ├── MarkdownStore.swift        ← PUBLIC: autosave store
-│   ├── Models/Models.swift        @Observable: Block, TableData, EditorDocument
-│   ├── Services/MarkdownCodec.swift Markdown ↔ blocks codec
+│   ├── Models/Segments.swift      @Observable Segment (text run / widget), ParagraphKind
+│   │        SegmentDocument.swift Ordered segment list + focus/selection state
+│   │        Models.swift          BlockKind, TableData, ColumnAlignment (shared by segments)
+│   ├── Services/SegmentCodec.swift   Markdown ↔ segments (the real document codec)
+│   │           MarkdownCodec.swift   Inline Markdown ↔ attributed text (bold/italic/links, table rows)
+│   │           SegmentStyle.swift    Paragraph attribute → NSAttributedString styling
 │   │           SyntaxHighlighter.swift Tokenizer + code highlighting
-│   ├── Views/EditorView           Document surface + blocks
-│   │      BlockRowView             Block rendering + drag/select
-│   │      BlockTextView            Text input (NSTextView)
-│   │      BlockActionMenu          Block mutations
-│   │      SlashMenu                Block type picker
-│   │      FormatBar                Floating inline-format toolbar
-│   │      TableBlockView, ImageBlockView, InlineMath
-│   │      MermaidBlockView         Diagram rendering (WKWebView)
-│   └── Resources/mermaid.html, mermaid.min.js
+│   ├── Views/SegmentEditorView       Continuous document surface + widget layout
+│   │      SegmentTextView            Multi-paragraph text run (NSTextView-backed)
+│   │      SegmentWidgets             Code/image/equation/divider widget views
+│   │      BlockTextView              Shared AutoSizingTextView base (bold/italic/code toggles)
+│   │      SlashMenu                  Block type picker
+│   │      FormatBar                  Floating inline-format toolbar
+│   │      TableBlockView, TableCellTextView, InlineMath
+│   │      MermaidWebView, MermaidZoomView  Diagram rendering + zoom/pan viewer (WKWebView)
+│   └── Resources/mermaid.html, mermaid-zoom.html, mermaid.min.js
 └── Tests/MyaeEditorKitTests/
 ```
 
@@ -101,137 +112,101 @@ The package exports five types: `MyaeEditor`, `MyaeEditorController`, `MyaeEdito
 
 ### Why MV, not MVVM
 
-`Block`, `TableData`, and `EditorDocument` are `@Observable` classes. Views
-hold them directly (`@State private var document: EditorDocument`). When you
-change a model, the screen updates by itself — there is no `ObservableObject`,
-no `@Published`, and no extra ViewModel layer in between. This keeps things
-simple: models hold the data, views change it, services just do plain
-calculations.
+`Segment`, `SegmentDocument`, and `TableData` are `@Observable` classes. Views
+hold them directly. When you change a model, the screen updates by itself —
+there is no `ObservableObject`, no `@Published`, and no extra ViewModel layer
+in between. This keeps things simple: models hold the data, views change it,
+services just do plain calculations.
 
 ## How the Editor Works
 
-The whole document is just an **ordered list of `Block` objects**, stored on
-`EditorDocument`. `EditorView` shows that list and changes it — there is no
-tree structure, just this one list. Everything below is built on top of these
-two types.
+The document is an ordered list of **`Segment`s**, stored on
+`SegmentDocument`. Most of the document is one `Segment.text` case: a run of
+paragraphs (paragraph/heading/list/todo/quote) fused into a single
+`NSTextStorage` that a text view attaches to directly — the storage *is* the
+model, so there is no separate per-line block to keep in sync. Non-text
+content (code blocks, tables, images, equations, dividers) is a widget segment
+sitting between text runs. `SegmentEditorView` renders the segment list top to
+bottom; there is no tree structure.
 
-### The `Block` object
+### The `Segment` object
 
-A `Block` (in `Models/Models.swift`) is one line or element you can edit. It
-is an `@Observable` class, so changing one field only redraws the parts of the
-screen that show that field:
+A `Segment` (in `Models/Segments.swift`) is one piece of the document:
 
-| Field       | Meaning                                             |
-| ----------- | --------------------------------------------------- |
-| `id`        | A unique `UUID` — used for lists, dragging, selection |
-| `kind`      | The block type (paragraph, heading, list, code, …)  |
-| `text`      | `NSAttributedString` — the styled text (bold/italic) |
-| `checked`   | Whether a to-do box is checked                       |
-| `depth`     | How indented the block is (0 = top level)            |
-| `language`  | Code language, used for syntax highlighting          |
-| `table`     | `TableData`, only used when `kind == .table`         |
-| `imagePath` | Path to the image, only used when `kind == .image`   |
+| Payload case | Meaning |
+| ------------ | ------- |
+| `.text(NSTextStorage)` | A run of editable paragraphs — the only kind with a text view |
+| `.code(language:text:)` | A fenced code block, including Mermaid (`language == .mermaid`) |
+| `.table(TableData)` | A table widget |
+| `.image(path:)` | An image widget |
+| `.equation(latex:)` | A centered display equation (LaTeX source) |
+| `.divider` | A horizontal rule |
 
-A block does **not** store its own position — its order just comes from its
-place in `document.blocks`. This makes reordering easy.
+Inside a text segment's storage, each paragraph carries a `.paragraphKind`
+attribute (a `ParagraphKind`: `BlockKind` + list `depth` + todo `checked`
+state), applied across the whole paragraph including its trailing newline so
+typing at the end inherits it. `BlockKind` and table types (`TableData`,
+`ColumnAlignment`) still live in `Models/Models.swift`, shared by both segment
+kinds.
 
-### `EditorDocument` — where everything is stored
+### `SegmentDocument` — where everything is stored
 
-`EditorView` keeps one `@State private var document: EditorDocument`. This
-document holds:
+`SegmentEditorView` keeps one `@State private var document`, actually the
+controller's internal `SegmentDocument`. It holds:
 
-- `blocks: [Block]` — the list of content, in order.
-- `focusedBlockID` / `focusAtStart` — which block has the cursor, and whether
-  the cursor should go to the start (used after merging or deleting blocks).
-- `selectedBlockIDs` — which whole blocks are selected (by dragging, or
-  `⌘A`).
+- `segments: [Segment]` — the document content, in order.
+- `focusedSegmentID` / `focusAtStart` — which text (or code) segment has the
+  cursor, and whether it should land at the start.
+- `selectedSegmentIDs` — whole widget/segment selection (drag, or `⌘A`).
 - `pendingCaretLocation` — a one-time request to put the cursor at an exact
-  spot (used when Backspace joins two blocks together).
-- `autosaveSignal` — waits about 2 seconds after your last edit, then saves.
-  Every change calls `markEdited()`, which starts this timer.
+  spot (used when a merge crosses a widget boundary).
+- `didEdit` — a Combine signal the controller debounces for autosave/dirty
+  tracking.
 
-Every edit goes through document methods like `insertBlock`,
-`deleteAndFocusPrevious`, `mergeIntoPrevious`, `changeKind`, `duplicate`,
-`indent`/`outdent`, and `move…`. Views always call these methods — they never
-change the block list directly.
-
-### Reordering blocks (drag and drop)
-
-Reordering just moves items around in `document.blocks`, based on where you
-drag:
-
-1. Each visible row reports its position on screen (using SwiftUI's
-   `RowFramePreference`), stored in `rowFrames: [UUID: CGRect]`. To save
-   performance, this is only tracked while you are dragging or selecting.
-2. While dragging, `reorder(toY:)` checks the other blocks and finds the
-   first one whose middle is below your pointer — that spot becomes the drop
-   location.
-3. If the drop location hasn't changed, nothing happens (to avoid extra
-   updates). Otherwise it calls `document.move(id:toIndexAmongOthers:)` with
-   an animation.
-4. `move(id:toIndexAmongOthers:)` takes the block out and puts it back in at
-   the new spot. Since the list order *is* the display order, the screen
-   updates automatically.
-
-Because rows use a `LazyVStack`, only rows currently on screen have known
-positions — you can only drop a block where you can see it (there's no
-auto-scroll while dragging).
+Structural edits — converting a fenced-code paragraph into a real code
+segment, splicing pasted widgets into the middle of a text run, removing a
+widget and rejoining the surrounding text, moving focus across a widget — all
+go through `SegmentDocument` methods (`convertParagraphToCodeBlock`,
+`spliceSegments`, `removeWidget`, `focusUp`/`focusDown`, `normalize`). A
+`normalize()` pass keeps the invariants: no two adjacent text segments (they
+get merged), and the document always has at least one text segment.
 
 ### Focus and cursor
 
-Views don't fight over the cursor. When something changes, it sets
-`focusedBlockID` (and sometimes `focusAtStart` or `pendingCaretLocation`).
-`BlockTextView` watches these values and moves the real cursor. Example:
-pressing Backspace at the start of a block joins it with the block above,
-removes the empty block, and places the cursor exactly where the two blocks
-met.
+Views don't fight over the cursor. `SegmentDocument` sets `focusedSegmentID`
+(and sometimes `focusAtStart` or `pendingCaretLocation`); `SegmentTextView`
+watches these and moves the real cursor. Arrow keys at the top/bottom edge of
+a text run step focus into the nearest editable neighbor (skipping over
+non-editable widgets, entering a table at its first/last row).
 
-### Selecting whole blocks
+### Selecting whole segments
 
-Dragging across the left margin, or pressing `⌘A`, selects whole blocks (not
-just text) and removes text focus. A key listener in `EditorView` then sends
-Copy/Cut/Delete/Escape to these selected blocks — copying turns the selected
-blocks into Markdown text using `MarkdownCodec`.
-
-You can also start a normal text selection and turn it into a block
-selection: if you drag past the edge of the current block, it switches from
-selecting characters to selecting whole blocks (like Notion). Dragging back
-switches back to character selection, without losing your starting point.
+Dragging, or pressing `⌘A` with no text run focused, selects whole segments
+(tables, images, code blocks, etc. as units) and removes text focus. A key
+monitor in `SegmentEditorView` then routes Copy/Cut/Delete/Escape/Paste to the
+selection — copying turns the selected segments into Markdown text using
+`SegmentCodec`.
 
 ### Popups
 
-Each block row (`BlockRowView`) can show two small popup menus that appear
-next to it and close when you click outside.
+**The `/` menu (`SlashMenu`)** — type `/` on an empty-ish line to open a
+filterable list of block types below the cursor; `↑`/`↓` to move, `Return` to
+pick, `Esc` to cancel. Picking an item removes the `/query` text and either
+turns the current paragraph into that kind or inserts a widget segment.
 
-**The `/` menu (`SlashMenu`)** — used to add a new block type:
+**Inline math and link popovers** — double-click an inline math attachment or
+a link to edit it in a small popover anchored to the click point.
 
-- Typing `/` on an empty-ish line opens this menu below the cursor.
-- As you keep typing, the text after `/` filters the list live — even though
-  your cursor stays in the block, not in the popup.
-- You can filter by name, and use `↑`/`↓` to move, `Return` to pick, and
-  `Esc` to cancel. The list wraps around at the top/bottom.
-- Picking an item removes the `/query` text and turns the block into that
-  type. Each row shows an icon, a name, and a short description.
-
-**The block action menu (`BlockActionMenu`)** — used to act on a block that
-already exists:
-
-- Hover over a row to see a drag handle (`=`). **Click** it to open this
-  menu; **drag** it to reorder the block.
-- It's a searchable list of actions: **"Turn into"** (change the block type),
-  **Duplicate**, and **Delete**.
-- It changes based on block type — for example, a table block also shows
-  toggles for a header row or header column.
-- Typing in the search box filters the list.
-
-Both popups look the same (frosted background, rounded corners, soft shadow)
-and put the cursor in the search box automatically when opened.
+**The floating format bar (`FormatBar`)** — appears above a non-empty text
+selection in a borderless, non-activating panel so its buttons never steal
+focus from the text view.
 
 ### Saving files
 
-`MarkdownCodec.encode` turns `document.blocks` into a Markdown file.
-`MarkdownCodec.decode` turns a Markdown file back into blocks. Autosave only
-writes to the `.md` file when the content has actually changed.
+`SegmentCodec.encode` turns `document.segments` into a Markdown file.
+`SegmentCodec.decode` turns a Markdown file back into segments (using
+`MarkdownCodec` for inline-formatting and table-row parsing along the way).
+Autosave only writes to the `.md` file when the content has actually changed.
 
 ### Windows and opening files
 
@@ -244,7 +219,7 @@ The New and Open menu actions are handled in `FileCommands`
   loads into it. If not, a new window opens and the file loads there.
 - The Open picker only shows `.md` files.
 - If you pick a file before any window exists, the file path is remembered in
-  `LaunchIntent.pendingOpenURL` until a new window opens and loads it.
+  `AppLaunchIntent.pendingOpenURL` until a new window opens and loads it.
 
 ## Keyboard Shortcuts
 
@@ -258,10 +233,11 @@ The New and Open menu actions are handled in `FileCommands`
 | Italic (text selected)         | `⌘I`     |
 | Inline code (text selected)    | `⌘E`     |
 | Strikethrough (text selected)  | `⇧⌘S`    |
+| Paste as plain text            | `⇧⌘V`    |
 
 ## Tests
 
-- `MyaeEditorKit/Tests/MyaeEditorKitTests/` — package unit tests (controller, markdown codec)
+- `MyaeEditorKit/Tests/MyaeEditorKitTests/` — package unit tests (`MyaeEditorControllerTests`, `SegmentCodecTests`)
 - `MyaeEditorTests/` — app smoke tests
 - `MyaeEditorUITests/` — UI tests
 
