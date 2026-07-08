@@ -3,7 +3,9 @@ import PackageDescription
 
 let package = Package(
     name: "MyaeEditorKit",
+    defaultLocalization: "en",
     platforms: [.macOS(.v15)],
+    version: "0.1.0",
     products: [
         .library(name: "MyaeEditorKit", targets: ["MyaeEditorKit"]),
     ],
