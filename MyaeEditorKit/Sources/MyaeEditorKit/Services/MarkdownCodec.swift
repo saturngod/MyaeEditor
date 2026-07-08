@@ -14,7 +14,13 @@ enum MarkdownCodec {
     /// marking only the bold/italic that go *beyond* the base font (so a semibold
     /// table header isn't wrapped in ** for its inherent weight). Reused by table
     /// cells, which store their text as inline Markdown.
-    static func inlineMarkdown(from attr: NSAttributedString, baseFont: NSFont) -> String {
+    static func inlineMarkdown(from source: NSAttributedString, baseFont: NSFont) -> String {
+        // Drop the display-only `.kern` that spaces inline code from its neighbors
+        // (see `InlineCode.applyOuterSpacing`). It sits on the run's last character,
+        // so leaving it in would break the code run at that boundary and emit two
+        // backtick pairs (`cod``e`). It carries no Markdown meaning, so strip it first.
+        let attr = NSMutableAttributedString(attributedString: source)
+        attr.removeAttribute(.kern, range: NSRange(location: 0, length: attr.length))
         let base = NSFontManager.shared.traits(of: baseFont)
         let baseBold = base.contains(.boldFontMask)
         let baseItalic = base.contains(.italicFontMask)
@@ -252,6 +258,7 @@ enum MarkdownCodec {
             }
             append(String(c)); i += 1
         }
+        InlineCode.applyOuterSpacing(to: result)
         return result
     }
 }

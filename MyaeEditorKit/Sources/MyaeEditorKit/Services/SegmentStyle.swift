@@ -58,6 +58,7 @@ enum SegmentStyle {
         if let para = attrs[.paragraphStyle] {
             m.addAttribute(.paragraphStyle, value: para, range: full)
         }
+        applyBaselineOffset(from: attrs, to: m, range: full)
         if m.length > 0 {
             m.addAttribute(.paragraphKind, value: pk, range: full)
             // Note: a checked todo's strikethrough/dim is a display-only decoration
@@ -84,6 +85,21 @@ enum SegmentStyle {
 
     static func makeStorage(from attr: NSAttributedString) -> NSTextStorage {
         NSTextStorage(attributedString: attr)
+    }
+
+    /// Apply (or clear) the vertical-centering `.baselineOffset` implied by
+    /// `attrs` over `range` of `storage`. `.baselineOffset` is a per-character
+    /// attribute, not part of `NSParagraphStyle`, so re-assigning a paragraph's
+    /// kind must reset it just as reliably as it sets it — converting a heading
+    /// (no shift) back to a body paragraph needs the old shift cleared, not just
+    /// the new one skipped.
+    static func applyBaselineOffset(from attrs: [NSAttributedString.Key: Any],
+                                    to storage: NSMutableAttributedString, range: NSRange) {
+        if let shift = attrs[.baselineOffset] {
+            storage.addAttribute(.baselineOffset, value: shift, range: range)
+        } else {
+            storage.removeAttribute(.baselineOffset, range: range)
+        }
     }
 
     /// Read the paragraph kind recorded at a location, defaulting to `.paragraph`.

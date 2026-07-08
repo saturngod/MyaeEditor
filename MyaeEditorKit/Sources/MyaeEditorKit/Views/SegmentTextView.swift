@@ -97,7 +97,6 @@ struct SegmentTextView: NSViewRepresentable {
         tv.placeholder = "Type '/' for commands"
         // Attach the shared storage: edits land straight in the segment's model.
         tv.layoutManager?.replaceTextStorage(storage)
-        tv.layoutManager?.delegate = tv   // vertical centering within line spacing
         tv.typingAttributes = SegmentStyle.attributes(for: .paragraph)
         tv.unregisterDraggedTypes()
         return tv
@@ -599,12 +598,19 @@ final class SegmentNSTextView: AutoSizingTextView {
         storage.beginEditing()
         let attrs = SegmentStyle.attributes(for: pk)
         if let para = attrs[.paragraphStyle] { storage.addAttribute(.paragraphStyle, value: para, range: pr) }
+        SegmentStyle.applyBaselineOffset(from: attrs, to: storage, range: pr)
         if pr.length > 0 { storage.addAttribute(.paragraphKind, value: pk, range: pr) }
         if restyleFonts, pr.length > 0 {
             let base = pk.kind.baseFont
             let color: NSColor = (pk.kind == .quote) ? .secondaryLabelColor : .textColor
             storage.enumerateAttribute(.font, in: pr) { value, sub, _ in
-                if (storage.attribute(.inlineCode, at: sub.location, effectiveRange: nil) as? Bool) == true { return }
+                // Inline code keeps its monospace face but must still track the new
+                // base size — otherwise turning a paragraph into a heading leaves the
+                // code run at the old (smaller) size beside the scaled-up text.
+                if (storage.attribute(.inlineCode, at: sub.location, effectiveRange: nil) as? Bool) == true {
+                    storage.addAttribute(.font, value: InlineCode.font(size: base.pointSize), range: sub)
+                    return
+                }
                 if storage.attribute(.attachment, at: sub.location, effectiveRange: nil) != nil { return }
                 let traits = (value as? NSFont).map { NSFontManager.shared.traits(of: $0) } ?? []
                 var f = base
@@ -640,6 +646,7 @@ final class SegmentNSTextView: AutoSizingTextView {
             if let para = attrs[.paragraphStyle] {
                 storage.addAttribute(.paragraphStyle, value: para, range: enclosing)
             }
+            SegmentStyle.applyBaselineOffset(from: attrs, to: storage, range: enclosing)
             storage.addAttribute(.paragraphKind, value: pk, range: enclosing)
         }
         storage.endEditing()

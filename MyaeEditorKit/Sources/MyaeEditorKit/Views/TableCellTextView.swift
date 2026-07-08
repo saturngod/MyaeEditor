@@ -119,7 +119,6 @@ struct TableCellTextView: NSViewRepresentable {
         tv.baseFontOverride = baseFont
         tv.alignment = alignment.nsTextAlignment
         tv.cellFormatBar = formatBar
-        tv.layoutManager?.delegate = tv   // vertical centering within line spacing
         tv.typingAttributes = typingAttributes
         tv.textStorage?.setAttributedString(attributed(from: markdown))
         let coordinator = context.coordinator
@@ -182,16 +181,23 @@ struct TableCellTextView: NSViewRepresentable {
         return para
     }
 
+    /// Vertical-centering shift for `cellParagraphStyle`'s line spacing — see
+    /// `BlockTextView.typingAttributes(for:)` for why this is a `.baselineOffset`
+    /// attribute (works identically under TextKit 1 and TextKit 2) rather than an
+    /// `NSLayoutManagerDelegate` hook.
+    private var cellBaselineOffset: CGFloat { BlockTextView.paragraphLineSpacing / 2 }
+
     private var typingAttributes: [NSAttributedString.Key: Any] {
         [.font: baseFont, .foregroundColor: NSColor.textColor,
-         .paragraphStyle: cellParagraphStyle]
+         .paragraphStyle: cellParagraphStyle, .baselineOffset: cellBaselineOffset]
     }
 
     private func attributed(from md: String) -> NSAttributedString {
         let attr = NSMutableAttributedString(
             attributedString: MarkdownCodec.inlineAttributed(md, baseFont: baseFont, color: .textColor))
-        attr.addAttribute(.paragraphStyle, value: cellParagraphStyle,
-                          range: NSRange(location: 0, length: attr.length))
+        let full = NSRange(location: 0, length: attr.length)
+        attr.addAttribute(.paragraphStyle, value: cellParagraphStyle, range: full)
+        attr.addAttribute(.baselineOffset, value: cellBaselineOffset, range: full)
         return attr
     }
 
