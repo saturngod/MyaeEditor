@@ -339,6 +339,13 @@ struct CodeSegmentEditor: NSViewRepresentable {
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
         tv.textContainer?.widthTracksTextView = true
+        // Same fixed-height, baseline-centered lines (and centered caret) as the
+        // main editor. The highlighter rewrites attributes without `.paragraphKind`,
+        // so the code font/multiple are set as an override instead.
+        let codeLM = CenteringLayoutManager()
+        codeLM.overrideFont = BlockKind.code.baseFont
+        codeLM.overrideMultiple = BlockTextView.lineHeightMultiple(for: .code)
+        tv.textContainer?.replaceLayoutManager(codeLM)
         tv.font = BlockKind.code.baseFont
         tv.typingAttributes = BlockTextView.typingAttributes(for: .code)
         if let code = segment.codeText { tv.textStorage?.setAttributedString(code) }
