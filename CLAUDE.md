@@ -15,12 +15,12 @@ xcodebuild -project MyaeEditor.xcodeproj -scheme MyaeEditor -destination 'platfo
 
 Run the package tests (this is where real coverage lives):
 ```bash
-cd MyaeEditorKit && swift test
+swift test
 ```
 
 Run a single test:
 ```bash
-cd MyaeEditorKit && swift test --filter MarkdownCodecTests
+swift test --filter MarkdownCodecTests
 ```
 
 Build a release `.dmg` (needs `brew install create-dmg`):

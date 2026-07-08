@@ -592,7 +592,7 @@
 /* Begin XCLocalSwiftPackageReference section */
 		A0FEED012FF7000000000001 /* XCLocalSwiftPackageReference "MyaeEditorKit" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = MyaeEditorKit;
+			relativePath = .;
 		};
 /* End XCLocalSwiftPackageReference section */
 
