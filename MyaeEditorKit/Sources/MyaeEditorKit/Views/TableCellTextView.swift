@@ -177,7 +177,7 @@ struct TableCellTextView: NSViewRepresentable {
     /// the attributed string would otherwise clobber the view's `alignment`.
     private var cellParagraphStyle: NSParagraphStyle {
         let para = NSMutableParagraphStyle()
-        para.lineSpacing = 10
+        para.lineSpacing = BlockTextView.paragraphLineSpacing
         para.alignment = alignment.nsTextAlignment
         return para
     }

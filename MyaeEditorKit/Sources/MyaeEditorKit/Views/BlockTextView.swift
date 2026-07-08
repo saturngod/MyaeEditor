@@ -41,9 +41,19 @@ enum InlineCode {
 /// Kept under the historical name because call sites throughout the package use
 /// `BlockTextView.typingAttributes(for:)`.
 enum BlockTextView {
+    /// Line spacing shared by every paragraph kind that isn't a heading/code (which
+    /// use `lineHeightMultiple` instead) — the default case below, and table cells
+    /// (`TableCellTextView.cellParagraphStyle`), which have no `BlockKind` of their
+    /// own but should read the same as a wrapped paragraph.
+    static let paragraphLineSpacing: CGFloat = 10
+
     /// Cache of the per-kind typing attributes — constant per kind; rebuilt
     /// paragraph styles on every call would be wasted work. Main-thread only.
     private static var typingAttributesCache: [BlockKind: [NSAttributedString.Key: Any]] = [:]
+    /// Cache of `centeringShift(for:)`, keyed separately from `typingAttributesCache`
+    /// since it's read once per drawn marker/pill and shouldn't re-cast the
+    /// paragraph style out of the attributes dictionary every time.
+    private static var centeringShiftCache: [BlockKind: CGFloat] = [:]
 
     static func typingAttributes(for kind: BlockKind) -> [NSAttributedString.Key: Any] {
         if let cached = typingAttributesCache[kind] { return cached }
@@ -77,7 +87,7 @@ enum BlockTextView {
             // lineSpacing (gap *between* lines) instead of lineHeightMultiple
             // (which adds leading *above* the first line and would drop the text
             // below its list bullet / checkbox). This keeps markers aligned.
-            para.lineSpacing = 10
+            para.lineSpacing = paragraphLineSpacing
             para.paragraphSpacing = 2
         }
         var color: NSColor = .textColor
@@ -96,8 +106,11 @@ enum BlockTextView {
     /// Marker/pill drawing adds this back because they measure from the unshifted
     /// layout rects. Zero for kinds that don't use `lineSpacing` (headings/code).
     static func centeringShift(for kind: BlockKind) -> CGFloat {
+        if let cached = centeringShiftCache[kind] { return cached }
         let para = typingAttributes(for: kind)[.paragraphStyle] as? NSParagraphStyle
-        return (para?.lineSpacing ?? 0) / 2
+        let shift = (para?.lineSpacing ?? 0) / 2
+        centeringShiftCache[kind] = shift
+        return shift
     }
 }
 
@@ -249,6 +262,11 @@ class AutoSizingTextView: NSTextView, NSLayoutManagerDelegate {
 
     // MARK: Vertical centering within line spacing
 
+    /// `SegmentTextView`/`TableCellTextView` (the SwiftUI-representable-backed
+    /// views) wire `layoutManager?.delegate` up front in `makeNSView`, before the
+    /// first layout pass — the `lm.delegate !== self` guard below then makes this a
+    /// no-op for them. This is the fallback for any other `AutoSizingTextView`
+    /// subclass (e.g. `CodeNSTextView`) that doesn't set it explicitly at creation.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil, let lm = layoutManager, lm.delegate !== self else { return }
@@ -271,8 +289,10 @@ class AutoSizingTextView: NSTextView, NSLayoutManagerDelegate {
                        baselineOffset: UnsafeMutablePointer<CGFloat>,
                        in textContainer: NSTextContainer,
                        forGlyphRange glyphRange: NSRange) -> Bool {
-        guard let storage = layoutManager.textStorage, storage.length > 0 else { return false }
+        guard let storage = layoutManager.textStorage, storage.length > 0,
+              glyphRange.location != NSNotFound else { return false }
         let charIndex = layoutManager.characterIndexForGlyph(at: glyphRange.location)
+        guard charIndex != NSNotFound else { return false }
         let idx = min(max(charIndex, 0), storage.length - 1)
         guard let para = storage.attribute(.paragraphStyle, at: idx, effectiveRange: nil) as? NSParagraphStyle,
               para.lineSpacing > 0 else { return false }
