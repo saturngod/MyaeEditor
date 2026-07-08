@@ -30,6 +30,18 @@ final class CenteringLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         delegate = self
     }
 
+    /// When set (table cells), every fragment uses this font with
+    /// `overrideMultiple` instead of reading `.paragraphKind` — a cell has a
+    /// single style and its storage carries no kind attribute.
+    var overrideFont: NSFont? {
+        didSet {
+            guard overrideFont !== oldValue else { return }
+            invalidateLayout(forCharacterRange: NSRange(location: 0, length: textStorage?.length ?? 0),
+                             actualCharacterRange: nil)
+        }
+    }
+    var overrideMultiple: CGFloat = 1.5
+
     /// Fixed fragment height per kind — constant per kind, cached.
     private var fixedHeightCache: [BlockKind: CGFloat] = [:]
 
@@ -38,6 +50,22 @@ final class CenteringLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         let h = ceil(BlockTextView.lineHeightMultiple(for: kind) * defaultLineHeight(for: kind.baseFont))
         fixedHeightCache[kind] = h
         return h
+    }
+
+    /// The base font + fixed fragment height governing the line whose first
+    /// character is at `charIndex` (nil → the typing kind / override).
+    private func lineMetrics(forCharacterAt charIndex: Int?) -> (font: NSFont, fixed: CGFloat) {
+        if let font = overrideFont {
+            return (font, ceil(overrideMultiple * defaultLineHeight(for: font)))
+        }
+        let kind: BlockKind
+        if let i = charIndex, let storage = textStorage, i < storage.length {
+            kind = ((storage.attribute(.paragraphKind, at: i, effectiveRange: nil)
+                     as? ParagraphKind) ?? .paragraph).kind
+        } else {
+            kind = (firstTextView?.typingAttributes[.paragraphKind] as? ParagraphKind)?.kind ?? .paragraph
+        }
+        return (kind.baseFont, fixedLineHeight(for: kind))
     }
 
     // MARK: NSLayoutManagerDelegate
@@ -57,11 +85,8 @@ final class CenteringLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         // rather than clipping the attachment.
         if storage.containsAttachments(in: charRange) { return false }
 
-        let pk = (storage.attribute(.paragraphKind, at: charRange.location,
-                                    effectiveRange: nil) as? ParagraphKind) ?? .paragraph
-        let font = pk.kind.baseFont
+        let (font, fixed) = lineMetrics(forCharacterAt: charRange.location)
         let fontLine = defaultLineHeight(for: font)
-        let fixed = fixedLineHeight(for: pk.kind)
 
         // Preserve inter-paragraph spacing: paragraphSpacingBefore belongs to a
         // paragraph's first fragment, paragraphSpacing to the fragment holding
@@ -102,8 +127,7 @@ final class CenteringLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     /// trailing empty paragraph matches its neighbors.
     override func setExtraLineFragmentRect(_ fragmentRect: NSRect, usedRect: NSRect,
                                            textContainer container: NSTextContainer) {
-        let kind = (firstTextView?.typingAttributes[.paragraphKind] as? ParagraphKind)?.kind ?? .paragraph
-        let fixed = fixedLineHeight(for: kind)
+        let (_, fixed) = lineMetrics(forCharacterAt: nil)
         var rect = fragmentRect
         rect.size.height = fixed
         var used = usedRect

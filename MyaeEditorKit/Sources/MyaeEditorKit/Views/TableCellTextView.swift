@@ -115,6 +115,12 @@ struct TableCellTextView: NSViewRepresentable {
         tv.isHorizontallyResizable = false
         tv.textContainer?.widthTracksTextView = true
         tv.textContainer?.heightTracksTextView = false
+        // Same fixed-height, baseline-centered lines (and centered caret) as the
+        // main editor. Cells have no `.paragraphKind`, so the cell font is set as
+        // an override instead.
+        let cellLM = CenteringLayoutManager()
+        cellLM.overrideFont = baseFont
+        tv.textContainer?.replaceLayoutManager(cellLM)
         tv.font = baseFont
         tv.baseFontOverride = baseFont
         tv.alignment = alignment.nsTextAlignment
@@ -146,6 +152,7 @@ struct TableCellTextView: NSViewRepresentable {
             tv.font = baseFont
             tv.baseFontOverride = baseFont
             tv.typingAttributes = typingAttributes
+            (tv.layoutManager as? CenteringLayoutManager)?.overrideFont = baseFont
         }
         if tv.alignment != alignment.nsTextAlignment {
             tv.alignment = alignment.nsTextAlignment
@@ -171,25 +178,19 @@ struct TableCellTextView: NSViewRepresentable {
         }
     }
 
-    /// Match the main editor's paragraph line spacing so a wrapped cell reads the
-    /// same as a wrapped paragraph. Carries the column alignment too, since setting
-    /// the attributed string would otherwise clobber the view's `alignment`.
+    /// Carries the column alignment, since setting the attributed string would
+    /// otherwise clobber the view's `alignment`. Line height/centering is not
+    /// done here — `CenteringLayoutManager` (with the cell font as override)
+    /// fixes the fragments, matching a wrapped paragraph in the main editor.
     private var cellParagraphStyle: NSParagraphStyle {
         let para = NSMutableParagraphStyle()
-        para.lineSpacing = BlockTextView.paragraphLineSpacing
         para.alignment = alignment.nsTextAlignment
         return para
     }
 
-    /// Vertical-centering shift for `cellParagraphStyle`'s line spacing — see
-    /// `BlockTextView.typingAttributes(for:)` for why this is a `.baselineOffset`
-    /// attribute (works identically under TextKit 1 and TextKit 2) rather than an
-    /// `NSLayoutManagerDelegate` hook.
-    private var cellBaselineOffset: CGFloat { BlockTextView.paragraphLineSpacing / 2 }
-
     private var typingAttributes: [NSAttributedString.Key: Any] {
         [.font: baseFont, .foregroundColor: NSColor.textColor,
-         .paragraphStyle: cellParagraphStyle, .baselineOffset: cellBaselineOffset]
+         .paragraphStyle: cellParagraphStyle]
     }
 
     private func attributed(from md: String) -> NSAttributedString {
@@ -197,7 +198,7 @@ struct TableCellTextView: NSViewRepresentable {
             attributedString: MarkdownCodec.inlineAttributed(md, baseFont: baseFont, color: .textColor))
         let full = NSRange(location: 0, length: attr.length)
         attr.addAttribute(.paragraphStyle, value: cellParagraphStyle, range: full)
-        attr.addAttribute(.baselineOffset, value: cellBaselineOffset, range: full)
+        attr.removeAttribute(.baselineOffset, range: full)
         return attr
     }
 
