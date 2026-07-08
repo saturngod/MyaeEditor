@@ -12,6 +12,7 @@ let package = Package(
             name: "MyaeEditorKit",
             resources: [
                 .copy("Resources/mermaid.html"),
+                .copy("Resources/mermaid-zoom.html"),
                 .copy("Resources/mermaid.min.js"),
             ],
             swiftSettings: [

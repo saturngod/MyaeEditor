@@ -198,7 +198,11 @@ struct SegmentEditorView: View {
         TableBlockView(table: table,
                        formatBar: formatBar,
                        onEdited: { document.markEdited() },
-                       onDelete: { document.removeWidget(segment.id) })
+                       onDelete: { document.removeWidget(segment.id) },
+                       onExit: { down in
+                           down ? document.focusDown(from: segment.id)
+                                : document.focusUp(from: segment.id)
+                       })
             .frame(width: width)
             .offset(x: -(width - columnW) / 2)   // keep the wide table page-centered
     }

@@ -22,7 +22,9 @@ enum MarkdownCodec {
         var out = ""
         let full = NSRange(location: 0, length: attr.length)
         attr.enumerateAttributes(in: full) { attrs, range, _ in
-            // Inline math attachment → $latex$
+            // Inline math attachment → $latex$ (checked before inline code: a math
+            // attachment char may also carry .inlineCode, and losing the latex would
+            // corrupt the document on save).
             if let math = attrs[.attachment] as? MathAttachment {
                 out += "$" + math.latex + "$"
                 return

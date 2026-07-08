@@ -186,6 +186,7 @@ struct SegmentCodeView: View {
     @State private var mermaidError: String?
     @State private var hovering = false
     @State private var justCopied = false
+    @State private var showingZoom = false
 
     private var language: CodeLanguage { segment.codeLanguage ?? .plain }
     private var text: NSAttributedString { segment.codeText ?? NSAttributedString(string: "") }
@@ -211,13 +212,34 @@ struct SegmentCodeView: View {
         .opacity(hovering || justCopied ? 1 : 0)
     }
 
+    /// Open the full-size zoom/pan viewer for the rendered diagram.
+    private var expandButton: some View {
+        Button { showingZoom = true } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("View larger")
+        .opacity(hovering ? 1 : 0)
+    }
+
     var body: some View {
         // Mermaid renders as a diagram when it isn't being edited; everything else
         // (and mermaid while focused) is an editable code block.
-        if language == .mermaid && rendersMermaid && !text.string.isEmpty && !isFocused {
-            mermaid
-        } else {
-            code
+        Group {
+            if language == .mermaid && rendersMermaid && !text.string.isEmpty && !isFocused {
+                mermaid
+            } else {
+                code
+            }
+        }
+        // Attached here (not on `mermaid`) so switching to the editable `code`
+        // branch — e.g. focus moving here — doesn't tear the sheet down mid-view.
+        .sheet(isPresented: $showingZoom) {
+            MermaidZoomView(source: text.string, theme: MermaidTheme(colorScheme)) {
+                showingZoom = false
+            }
         }
     }
 
@@ -238,7 +260,9 @@ struct SegmentCodeView: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor).opacity(0.85)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor).opacity(0.6)))
-        .overlay(alignment: .topTrailing) { copyButton.padding(10) }
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 10) { expandButton; copyButton }.padding(10)
+        }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture { document.focusedSegmentID = segment.id }   // tap mermaid → edit source

@@ -25,6 +25,11 @@ struct TableBlockView: View {
     var onEdited: () -> Void
     /// Delete the whole table (removes its segment).
     var onDelete: () -> Void
+    /// Step keyboard focus out of the table to the adjacent segment. `down` is
+    /// true when leaving through the bottom (down arrow on the last row). Returns
+    /// false when there is nowhere to go (table at the document edge, or the
+    /// neighbor is a non-editable widget), so the arrow can fall through.
+    var onExit: (_ down: Bool) -> Bool = { _ in false }
     /// Reports hover changes up to the enclosing row so its left-gutter controls
     /// (+ and drag handle) stay visible while the pointer is over the table's
     /// AppKit-backed cells — the row's own `.onHover` drops there.
@@ -79,6 +84,33 @@ struct TableBlockView: View {
         activeCell = TableCellID(r: index / cols, c: index % cols)
     }
 
+    /// Up/down arrow from a cell edge: move to the same column in the row above/
+    /// below, or step out of the table when already at the top/bottom row. Returns
+    /// whether the move was handled — at the top/bottom edge it reports whatever
+    /// `onExit` did, so a trapped arrow (nowhere to go) falls through to the cell.
+    private func moveVertically(from id: TableCellID, down: Bool, in table: TableData) -> Bool {
+        if down {
+            if id.r < table.rowCount - 1 { activeCell = TableCellID(r: id.r + 1, c: id.c); return true }
+            return onExit(true)
+        } else {
+            if id.r > 0 { activeCell = TableCellID(r: id.r - 1, c: id.c); return true }
+            return onExit(false)
+        }
+    }
+
+    /// Left/right arrow at a cell's start/end: advance in row-major order (same
+    /// path as Tab), wrapping across rows; step out of the table at the very
+    /// first/last cell. Returns whether the move was handled.
+    private func moveHorizontally(from id: TableCellID, forward: Bool, in table: TableData) -> Bool {
+        let cols = table.columnCount, rows = table.rowCount
+        guard cols > 0, rows > 0 else { return false }
+        let index = id.r * cols + id.c + (forward ? 1 : -1)
+        if index < 0 { return onExit(false) }
+        if index > rows * cols - 1 { return onExit(true) }
+        activeCell = TableCellID(r: index / cols, c: index % cols)
+        return true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top, spacing: 4) {
@@ -94,6 +126,14 @@ struct TableBlockView: View {
             hovering = $0
             onHoverChange?($0)
             if $0 { keepHover() } else { scheduleClearHover() }
+        }
+        // Keyboard nav (up/down arrow from a neighbouring segment) requested that
+        // the caret enter this table — focus column 0 of the requested row.
+        .onChange(of: table.pendingFocusRow) { _, row in
+            guard let row else { return }
+            let r = max(0, min(row, table.rowCount - 1))
+            activeCell = TableCellID(r: r, c: 0)
+            table.pendingFocusRow = nil
         }
     }
 
@@ -297,6 +337,8 @@ struct TableBlockView: View {
             formatBar: formatBar,
             activeCell: $activeCell,
             onTab: { forward in moveFocus(from: TableCellID(r: r, c: c), forward: forward, in: table) },
+            onVerticalMove: { down in moveVertically(from: TableCellID(r: r, c: c), down: down, in: table) },
+            onHorizontalMove: { forward in moveHorizontally(from: TableCellID(r: r, c: c), forward: forward, in: table) },
             setText: { new in
                 if table.cells.indices.contains(r), table.cells[r].indices.contains(c) {
                     table.cells[r][c] = new
@@ -383,6 +425,8 @@ struct TableCellView: View, Equatable {
     var formatBar: FormatBarController
     @Binding var activeCell: TableCellID?
     let onTab: (_ forward: Bool) -> Void
+    let onVerticalMove: (_ down: Bool) -> Bool
+    let onHorizontalMove: (_ forward: Bool) -> Bool
     let setText: (String) -> Void
     let onHover: (Bool) -> Void
     let menu: TableCellMenu
@@ -416,7 +460,9 @@ struct TableCellView: View, Equatable {
                 formatBar: formatBar,
                 cellID: TableCellID(r: r, c: c),
                 activeCell: $activeCell,
-                onTab: onTab
+                onTab: onTab,
+                onVerticalMove: onVerticalMove,
+                onHorizontalMove: onHorizontalMove
             )
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }

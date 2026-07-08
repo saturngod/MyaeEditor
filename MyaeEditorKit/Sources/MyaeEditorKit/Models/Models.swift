@@ -184,6 +184,12 @@ final class TableData {
     var hasHeaderRow: Bool = true
     var hasHeaderColumn: Bool = false
 
+    /// One-shot request from keyboard navigation to focus a cell when the caret
+    /// enters the table from an adjacent segment: 0 when arriving from above,
+    /// `rowCount - 1` when arriving from below. `TableBlockView` consumes it
+    /// (focuses column 0 of that row) and clears it. Not part of the Markdown.
+    var pendingFocusRow: Int?
+
     init(rows: Int = 3, columns: Int = 2) {
         cells = Array(repeating: Array(repeating: "", count: columns), count: rows)
         columnAlignments = Array(repeating: .none, count: columns)

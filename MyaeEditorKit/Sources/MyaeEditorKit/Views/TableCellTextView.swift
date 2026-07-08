@@ -20,6 +20,37 @@ import AppKit
 final class TableCellNSTextView: AutoSizingTextView {
     var onFocusChange: ((Bool) -> Void)?
     var cellFormatBar: FormatBarController?
+    /// Up arrow on the first visual line — leave the cell upward (to the row
+    /// above, or out the top of the table). Returns true if the move was handled.
+    var arrowUp: (() -> Bool)?
+    /// Down arrow on the last visual line — leave the cell downward (to the row
+    /// below, or out the bottom of the table). Returns true if handled.
+    var arrowDown: (() -> Bool)?
+    /// Left arrow with the caret at the very start of the cell — move to the
+    /// previous cell (or out of the table). Returns true if handled.
+    var arrowLeft: (() -> Bool)?
+    /// Right arrow with the caret at the very end of the cell. Returns true if handled.
+    var arrowRight: (() -> Bool)?
+
+    override func doCommand(by selector: Selector) {
+        switch selector {
+        case #selector(NSResponder.moveUp(_:)):
+            if caretIsOnFirstLine(), arrowUp?() == true { return }
+            super.doCommand(by: selector)
+        case #selector(NSResponder.moveDown(_:)):
+            if caretIsOnLastLine(), arrowDown?() == true { return }
+            super.doCommand(by: selector)
+        case #selector(NSResponder.moveLeft(_:)):
+            if selectedRange() == NSRange(location: 0, length: 0), arrowLeft?() == true { return }
+            super.doCommand(by: selector)
+        case #selector(NSResponder.moveRight(_:)):
+            let len = (string as NSString).length
+            if selectedRange() == NSRange(location: len, length: 0), arrowRight?() == true { return }
+            super.doCommand(by: selector)
+        default:
+            super.doCommand(by: selector)
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
@@ -54,6 +85,14 @@ struct TableCellTextView: NSViewRepresentable {
     @Binding var activeCell: TableCellID?
     /// Tab / Shift+Tab: move to the next / previous cell. Arg is forward.
     var onTab: (_ forward: Bool) -> Void
+    /// Up/down arrow at the cell's first/last visual line: move to the adjacent
+    /// row, or step out of the table. `down` is true for the down arrow. Returns
+    /// true when the caller moved focus (so the arrow shouldn't fall through).
+    var onVerticalMove: (_ down: Bool) -> Bool
+    /// Left/right arrow at the cell's start/end: move to the previous/next cell,
+    /// or step out of the table at the first/last cell. `forward` is true for
+    /// the right arrow. Returns true when focus moved.
+    var onHorizontalMove: (_ forward: Bool) -> Bool
 
     private var baseFont: NSFont {
         .systemFont(ofSize: 14, weight: isHeader ? .semibold : .regular)
@@ -88,6 +127,12 @@ struct TableCellTextView: NSViewRepresentable {
             guard let tv, let coordinator else { return }
             coordinator.focusChanged(tv, focused: focused)
         }
+        // Read `parent` through the coordinator so these keep calling the latest
+        // closure after SwiftUI rebuilds the representable.
+        tv.arrowUp = { [weak coordinator] in coordinator?.parent.onVerticalMove(false) ?? false }
+        tv.arrowDown = { [weak coordinator] in coordinator?.parent.onVerticalMove(true) ?? false }
+        tv.arrowLeft = { [weak coordinator] in coordinator?.parent.onHorizontalMove(false) ?? false }
+        tv.arrowRight = { [weak coordinator] in coordinator?.parent.onHorizontalMove(true) ?? false }
         // Don't intercept block-reorder drags.
         tv.unregisterDraggedTypes()
         return tv

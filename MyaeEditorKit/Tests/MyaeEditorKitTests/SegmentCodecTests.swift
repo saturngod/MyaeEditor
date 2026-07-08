@@ -162,4 +162,14 @@ struct SegmentCodecTests {
         #expect(found)
         #expect(SegmentCodec.encode(segments) == "before `code` after")
     }
+
+    /// A math attachment that also carries `.inlineCode` (e.g. the user selected
+    /// across inline math and pressed Cmd+E) must still encode as `$latex$` — the
+    /// math branch is checked before inline code so the latex is never dropped.
+    @Test func mathWithInlineCodeEncodesAsLatex() {
+        let s = NSMutableAttributedString(
+            attributedString: InlineMath.attributedString(latex: "x^2", fontSize: 16, kind: .paragraph))
+        s.addAttribute(.inlineCode, value: true, range: NSRange(location: 0, length: s.length))
+        #expect(MarkdownCodec.inlineMarkdown(from: s, baseFont: BlockKind.paragraph.baseFont) == "$x^2$")
+    }
 }

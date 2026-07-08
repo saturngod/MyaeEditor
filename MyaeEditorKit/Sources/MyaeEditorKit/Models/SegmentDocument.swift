@@ -240,6 +240,15 @@ final class SegmentDocument {
         guard let idx = index(of: segID) else { return false }
         var j = idx - 1
         while j >= 0 {
+            if case .table(let t) = segments[j].payload {
+                // Enter the table at its last row; the cell takes first responder.
+                // Clear any pending text caret so a stale one isn't applied to
+                // another segment while the table cell is focused.
+                focusedSegmentID = nil
+                pendingCaretLocation = nil
+                t.pendingFocusRow = max(0, t.rowCount - 1)
+                return true
+            }
             if segments[j].isText || segments[j].codeText != nil {
                 focusAtStart = false
                 if let s = segments[j].textStorage { pendingCaretLocation = (segments[j].id, s.length) }
@@ -257,6 +266,15 @@ final class SegmentDocument {
         guard let idx = index(of: segID) else { return false }
         var j = idx + 1
         while j < segments.count {
+            if case .table(let t) = segments[j].payload {
+                // Enter the table at its first row; the cell takes first responder.
+                // Clear any pending text caret so a stale one isn't applied to
+                // another segment while the table cell is focused.
+                focusedSegmentID = nil
+                pendingCaretLocation = nil
+                t.pendingFocusRow = 0
+                return true
+            }
             if segments[j].isText || segments[j].codeText != nil {
                 focusAtStart = true
                 focusedSegmentID = segments[j].id

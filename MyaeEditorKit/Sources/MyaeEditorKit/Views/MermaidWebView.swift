@@ -18,6 +18,16 @@ enum MermaidTheme: String {
     init(_ scheme: ColorScheme) { self = scheme == .dark ? .dark : .light }
 }
 
+/// A WKWebView that forwards scroll-wheel events up the responder chain, so the
+/// document keeps scrolling when the pointer is over an inline diagram. A plain
+/// WKWebView swallows the gesture (its own scroll view eats it), trapping the
+/// page scroll whenever the cursor is over a rendered mermaid block.
+final class ScrollPassthroughWebView: WKWebView {
+    override func scrollWheel(with event: NSEvent) {
+        nextResponder?.scrollWheel(with: event)
+    }
+}
+
 struct MermaidWebView: NSViewRepresentable {
     let source: String
     let theme: MermaidTheme
@@ -32,7 +42,7 @@ struct MermaidWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        let web = WKWebView(frame: .zero, configuration: config)
+        let web = ScrollPassthroughWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
         web.setValue(false, forKey: "drawsBackground")   // transparent; page paints its own bg
         web.autoresizingMask = [.width, .height]

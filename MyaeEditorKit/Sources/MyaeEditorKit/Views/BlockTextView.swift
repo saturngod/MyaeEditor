@@ -20,11 +20,20 @@ extension NSAttributedString.Key {
 /// Shared styling for inline code so the text view, encoder, and decoder produce
 /// identical runs.
 enum InlineCode {
-    static var background: NSColor { NSColor.secondaryLabelColor.withAlphaComponent(0.12) }
+    /// Fill and hairline stroke behind an inline-code run. Drawn as a rounded
+    /// "pill" by `AutoSizingTextView` — NOT a flat `.backgroundColor` attribute,
+    /// which paints a tight, edge-to-edge highlight that reads as unprofessional.
+    static var fill: NSColor { NSColor.secondaryLabelColor.withAlphaComponent(0.06) }
+    static var stroke: NSColor { NSColor.secondaryLabelColor.withAlphaComponent(0.10) }
+    /// Padding drawn on each side of the run's glyphs, and the corner radius. The
+    /// pill hugs the code glyphs; the natural spaces around inline code supply the
+    /// gap to neighboring words, so no layout space is reserved in the model.
+    static let hPadding: CGFloat = 2
+    static let cornerRadius: CGFloat = 4
     static func font(size: CGFloat) -> NSFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
 
     static func attributes(size: CGFloat, color: NSColor) -> [NSAttributedString.Key: Any] {
-        [.inlineCode: true, .font: font(size: size), .backgroundColor: background, .foregroundColor: color]
+        [.inlineCode: true, .font: font(size: size), .foregroundColor: color]
     }
 }
 
@@ -120,6 +129,66 @@ class AutoSizingTextView: NSTextView {
         }
     }
 
+    // MARK: Inline-code background
+
+    /// Draw rounded "pill" backgrounds behind every `.inlineCode` run, before the
+    /// glyphs are drawn. This replaces the flat `.backgroundColor` attribute so
+    /// inline code reads like GitHub's: padded, softly filled, hairline border.
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawInlineCodeBackgrounds(in: rect)
+    }
+
+    private func drawInlineCodeBackgrounds(in clip: NSRect) {
+        guard let lm = layoutManager, let tc = textContainer, let storage = textStorage,
+              storage.length > 0 else { return }
+        // Only scan the characters actually on screen — a caret blink or a scroll
+        // frame repaints a tiny region, so enumerating the whole storage would be
+        // wasted work in a large segment.
+        let visibleGlyphs = lm.glyphRange(forBoundingRect: clip, in: tc)
+        guard visibleGlyphs.length > 0 else { return }
+        let visibleChars = lm.characterRange(forGlyphRange: visibleGlyphs, actualGlyphRange: nil)
+        let origin = textContainerOrigin
+        let inset = InlineCode.hPadding
+        let radius = InlineCode.cornerRadius
+
+        storage.enumerateAttribute(.inlineCode, in: visibleChars) { value, range, _ in
+            guard (value as? Bool) == true, range.length > 0 else { return }
+            let font = (storage.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+                        ?? InlineCode.font(size: 16)
+            // Pill hugs the text height (ascender→descender + 1pt), NOT the full
+            // line-fragment height — otherwise stacked lines' pills overlap.
+            let textHeight = ceil(font.ascender - font.descender) + 2
+            // Left edge of the paragraph's text block. On a wrapped line a run can
+            // start here, and the pill's left padding must not spill into the list
+            // indent — clamp it to this edge.
+            let para = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle
+            let blockLeft = origin.x + tc.lineFragmentPadding + (para?.headIndent ?? 0)
+            let glyphRange = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            // One rounded rect per line fragment the run spans.
+            lm.enumerateEnclosingRects(forGlyphRange: glyphRange,
+                                       withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                       in: tc) { r, _ in
+                var box = r.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -inset, dy: 0)
+                // Keep the fill within the paragraph's text block.
+                if box.minX < blockLeft {
+                    box.size.width -= (blockLeft - box.minX)
+                    box.origin.x = blockLeft
+                }
+                // Center a text-height pill within the line fragment.
+                box.origin.y += (box.height - textHeight) / 2
+                box.size.height = textHeight
+                guard box.intersects(clip) else { return }
+                let path = NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius)
+                InlineCode.fill.setFill()
+                path.fill()
+                InlineCode.stroke.setStroke()
+                path.lineWidth = 1
+                path.stroke()
+            }
+        }
+    }
+
     func caretIsOnFirstLine() -> Bool {
         guard let lm = layoutManager, let tc = textContainer else { return true }
         let loc = selectedRange().location
@@ -131,7 +200,10 @@ class AutoSizingTextView: NSTextView {
 
     func caretIsOnLastLine() -> Bool {
         guard let lm = layoutManager, let tc = textContainer else { return true }
-        let loc = selectedRange().location
+        // Down-arrow collapses a selection to its END, so test that edge (not the
+        // selection's start) — otherwise a multi-line selection reports the wrong line.
+        let sel = selectedRange()
+        let loc = sel.location + sel.length
         let len = (string as NSString).length
         if loc >= len { return true }
         let caretRect = lm.boundingRect(forGlyphRange: NSRange(location: loc, length: 0), in: tc)
@@ -268,10 +340,8 @@ class AutoSizingTextView: NSTextView {
         if adding {
             storage.addAttribute(.inlineCode, value: true, range: range)
             storage.addAttribute(.font, value: InlineCode.font(size: base.pointSize), range: range)
-            storage.addAttribute(.backgroundColor, value: InlineCode.background, range: range)
         } else {
             storage.removeAttribute(.inlineCode, range: range)
-            storage.removeAttribute(.backgroundColor, range: range)
             storage.addAttribute(.font, value: base, range: range)
         }
         storage.endEditing()
