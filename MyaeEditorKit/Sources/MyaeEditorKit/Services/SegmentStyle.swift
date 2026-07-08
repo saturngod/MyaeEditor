@@ -102,6 +102,33 @@ enum SegmentStyle {
         }
     }
 
+    /// Re-derive every run's `.font` in `storage` from its paragraph kind's
+    /// current base font, in place — used when the editor's font setting changes
+    /// while a document is open. Mirrors `SegmentNSTextView.setParagraphKind`'s
+    /// re-font pass: inline code keeps its monospace face but tracks the base
+    /// size, math attachments are left untouched, and bold/italic traits are
+    /// re-applied. Only `.font` is touched, so the caret, selection, undo stack,
+    /// colors, and links all survive.
+    static func restyleFonts(in storage: NSTextStorage) {
+        guard storage.length > 0 else { return }
+        let full = NSRange(location: 0, length: storage.length)
+        storage.beginEditing()
+        storage.enumerateAttribute(.font, in: full, options: []) { value, sub, _ in
+            let base = paragraphKind(in: storage, at: sub.location).kind.baseFont
+            if (storage.attribute(.inlineCode, at: sub.location, effectiveRange: nil) as? Bool) == true {
+                storage.addAttribute(.font, value: InlineCode.font(size: base.pointSize), range: sub)
+                return
+            }
+            if storage.attribute(.attachment, at: sub.location, effectiveRange: nil) != nil { return }
+            let traits = (value as? NSFont).map { NSFontManager.shared.traits(of: $0) } ?? []
+            var f = base
+            if traits.contains(.boldFontMask) { f = NSFontManager.shared.convert(f, toHaveTrait: .boldFontMask) }
+            if traits.contains(.italicFontMask) { f = NSFontManager.shared.convert(f, toHaveTrait: .italicFontMask) }
+            storage.addAttribute(.font, value: f, range: sub)
+        }
+        storage.endEditing()
+    }
+
     /// Read the paragraph kind recorded at a location, defaulting to `.paragraph`.
     static func paragraphKind(in storage: NSTextStorage, at location: Int) -> ParagraphKind {
         guard storage.length > 0 else { return .paragraph }

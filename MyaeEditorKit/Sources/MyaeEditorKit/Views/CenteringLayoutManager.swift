@@ -52,6 +52,14 @@ final class CenteringLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         return h
     }
 
+    /// Drop cached fixed line heights (they derive from `kind.baseFont`) and force
+    /// a relayout, so the next layout re-measures against the editor's new fonts.
+    func invalidateFixedHeights() {
+        fixedHeightCache.removeAll()
+        invalidateLayout(forCharacterRange: NSRange(location: 0, length: textStorage?.length ?? 0),
+                         actualCharacterRange: nil)
+    }
+
     /// The base font + fixed fragment height governing the line whose first
     /// character is at `charIndex` (nil → the typing kind / override).
     private func lineMetrics(forCharacterAt charIndex: Int?) -> (font: NSFont, fixed: CGFloat) {

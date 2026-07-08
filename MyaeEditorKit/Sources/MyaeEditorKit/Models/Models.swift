@@ -103,14 +103,14 @@ enum BlockKind: String, CaseIterable, Identifiable, Codable {
     /// Base font used for the block's text.
     var baseFont: NSFont {
         switch self {
-        case .heading1: return .systemFont(ofSize: 30, weight: .bold)
-        case .heading2: return .systemFont(ofSize: 24, weight: .bold)
-        case .heading3: return .systemFont(ofSize: 20, weight: .semibold)
-        case .heading4: return .systemFont(ofSize: 18, weight: .semibold)
-        case .heading5: return .systemFont(ofSize: 16, weight: .semibold)
-        case .heading6: return .systemFont(ofSize: 14, weight: .semibold)
-        case .code:     return .monospacedSystemFont(ofSize: 14, weight: .regular)
-        default:        return .systemFont(ofSize: 16, weight: .regular)
+        case .heading1: return EditorFont.regular(ofSize: 30, weight: .bold)
+        case .heading2: return EditorFont.regular(ofSize: 24, weight: .bold)
+        case .heading3: return EditorFont.regular(ofSize: 20, weight: .semibold)
+        case .heading4: return EditorFont.regular(ofSize: 18, weight: .semibold)
+        case .heading5: return EditorFont.regular(ofSize: 16, weight: .semibold)
+        case .heading6: return EditorFont.regular(ofSize: 14, weight: .semibold)
+        case .code:     return EditorFont.monospaced(ofSize: 14, weight: .regular)
+        default:        return EditorFont.regular(ofSize: 16, weight: .regular)
         }
     }
 

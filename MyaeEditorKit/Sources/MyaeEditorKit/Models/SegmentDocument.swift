@@ -302,6 +302,19 @@ final class SegmentDocument {
         }
     }
 
+    /// Re-font every open text segment in place after the editor's font setting
+    /// changes — mutates each storage's `.font` runs directly (preserving caret,
+    /// selection, and undo) and invalidates its layout manager's cached line
+    /// heights. Code and table segments re-font through their own `updateNSView`
+    /// passes, which the configuration change also triggers.
+    func restyleTextFonts() {
+        for seg in segments {
+            guard let storage = seg.textStorage else { continue }
+            SegmentStyle.restyleFonts(in: storage)
+            (storage.layoutManagers.first as? CenteringLayoutManager)?.invalidateFixedHeights()
+        }
+    }
+
     /// Replace all segments (used on load/new). Resets focus to the first text run.
     func replaceAll(_ new: [Segment]) {
         segments = new.isEmpty ? [Segment.emptyText()] : new

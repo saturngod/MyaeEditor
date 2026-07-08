@@ -95,7 +95,7 @@ struct TableCellTextView: NSViewRepresentable {
     var onHorizontalMove: (_ forward: Bool) -> Bool
 
     private var baseFont: NSFont {
-        .systemFont(ofSize: 14, weight: isHeader ? .semibold : .regular)
+        EditorFont.regular(ofSize: 14, weight: isHeader ? .semibold : .regular)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -153,6 +153,11 @@ struct TableCellTextView: NSViewRepresentable {
             tv.baseFontOverride = baseFont
             tv.typingAttributes = typingAttributes
             (tv.layoutManager as? CenteringLayoutManager)?.overrideFont = baseFont
+            // The cell's existing characters carry the old baked-in font, so
+            // reload the content to re-font it (e.g. after the editor's font
+            // setting changes). `lastMarkdown` is unchanged, so this is the only
+            // path that refreshes the cell's font.
+            tv.textStorage?.setAttributedString(attributed(from: markdown))
         }
         if tv.alignment != alignment.nsTextAlignment {
             tv.alignment = alignment.nsTextAlignment

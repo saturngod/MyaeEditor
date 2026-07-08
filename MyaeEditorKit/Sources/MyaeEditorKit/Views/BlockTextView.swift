@@ -36,7 +36,7 @@ enum InlineCode {
     /// run's last character (right gap) and the character before the run (left gap)
     /// — a pure layout attribute the codec never sees, so round-trips are unaffected.
     static let outerGap: CGFloat = 5
-    static func font(size: CGFloat) -> NSFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
+    static func font(size: CGFloat) -> NSFont { EditorFont.monospaced(ofSize: size, weight: .regular) }
 
     static func attributes(size: CGFloat, color: NSColor) -> [NSAttributedString.Key: Any] {
         [.inlineCode: true, .font: font(size: size), .foregroundColor: color]
@@ -155,6 +155,14 @@ enum BlockTextView {
         let shift = (fixed - fontLine) / 2
         centeringShiftCache[kind] = shift
         return shift
+    }
+
+    /// Drop the per-kind caches that bake in `kind.baseFont` (typing attributes
+    /// and centering shifts). Call after the editor's font setting changes so
+    /// freshly typed text and marker placement use the new fonts.
+    static func invalidateStyleCaches() {
+        typingAttributesCache.removeAll()
+        centeringShiftCache.removeAll()
     }
 }
 

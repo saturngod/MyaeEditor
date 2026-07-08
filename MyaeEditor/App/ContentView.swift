@@ -25,16 +25,54 @@ struct ContentView: View {
     /// exactly once per window.
     @State private var controller: MyaeEditorController?
 
+    /// Sample font setting. `MyaeEditorKit` ships no settings UI — this shows how
+    /// a host app can offer one. The editor's fonts are process-wide, so the
+    /// setting is stored app-wide with `@AppStorage` (shared across every window)
+    /// rather than per-window `@State`, which would let two windows fight over
+    /// the one global font. Empty string means "use the system font".
+    @AppStorage("myae.bodyFont") private var bodyFont = ""
+    @AppStorage("myae.codeFont") private var codeFont = ""
+
+    private static let bodyFonts = ["System", "Helvetica Neue", "Georgia", "Avenir Next"]
+    private static let codeFonts = ["System Mono", "Menlo", "SF Mono", "Courier New"]
+
     var body: some View {
-        ZStack {
-            if let controller {
-                MyaeEditor(controller: controller,
-                           configuration: MyaeEditorConfiguration(showsTitleField: false))
+        VStack(spacing: 0) {
+            fontPickerBar
+            ZStack {
+                if let controller {
+                    MyaeEditor(controller: controller,
+                               configuration: MyaeEditorConfiguration(
+                                   showsTitleField: false,
+                                   fontFamilyName: bodyFont.isEmpty ? nil : bodyFont,
+                                   codeFontFamilyName: codeFont.isEmpty ? nil : codeFont))
+                }
             }
         }
         .onAppear {
             if controller == nil { controller = ContentView.makeController() }
         }
+    }
+
+    /// Two menus that drive `MyaeEditorConfiguration.fontFamilyName` /
+    /// `codeFontFamilyName` at runtime. Changing either value rebuilds the
+    /// configuration passed into `MyaeEditor`, which re-decodes the open
+    /// document with the new fonts baked in — no reopen required.
+    private var fontPickerBar: some View {
+        HStack {
+            Picker("Font", selection: $bodyFont) {
+                ForEach(Self.bodyFonts, id: \.self) { name in
+                    Text(name).tag(name == "System" ? "" : name)
+                }
+            }
+            Picker("Code Font", selection: $codeFont) {
+                ForEach(Self.codeFonts, id: \.self) { name in
+                    Text(name).tag(name == "System Mono" ? "" : name)
+                }
+            }
+            Spacer()
+        }
+        .padding(8)
     }
 
     /// Build the controller for a new window per the restore policy.

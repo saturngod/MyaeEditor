@@ -359,10 +359,23 @@ struct CodeSegmentEditor: NSViewRepresentable {
 
     func updateNSView(_ tv: CodeNSTextView, context: Context) {
         context.coordinator.parent = self
+        // Push a changed editor font setting onto the live code storage. Re-run
+        // the highlighter (it rewrites `.font` across the run) and reset the
+        // layout override; mutating storage attributes directly keeps the caret
+        // and undo intact.
+        let codeFont = BlockKind.code.baseFont
+        if tv.font != codeFont {
+            tv.font = codeFont
+            tv.typingAttributes = BlockTextView.typingAttributes(for: .code)
+            (tv.layoutManager as? CenteringLayoutManager)?.overrideFont = codeFont
+            if let storage = tv.textStorage {
+                SyntaxHighlighter.highlight(storage, language: language, font: codeFont)
+            }
+        }
         // Re-highlight when the language is switched via the dropdown.
         if context.coordinator.lastLanguage != language, let storage = tv.textStorage {
             context.coordinator.lastLanguage = language
-            SyntaxHighlighter.highlight(storage, language: language, font: BlockKind.code.baseFont)
+            SyntaxHighlighter.highlight(storage, language: language, font: codeFont)
         }
         if isFocused, tv.window?.firstResponder !== tv {
             DispatchQueue.main.async { [weak tv] in

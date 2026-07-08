@@ -71,7 +71,28 @@ public struct MyaeEditor: View {
             if externalController == nil, ownedController == nil {
                 ownedController = MyaeEditorController(markdown: markdownBinding?.wrappedValue ?? "")
             }
+            EditorFont.familyName = configuration.fontFamilyName
+            EditorFont.codeFamilyName = configuration.codeFontFamilyName
         }
+        .onChange(of: configuration.fontFamilyName) { _, newValue in
+            EditorFont.familyName = newValue
+            reapplyFonts()
+        }
+        .onChange(of: configuration.codeFontFamilyName) { _, newValue in
+            EditorFont.codeFamilyName = newValue
+            reapplyFonts()
+        }
+    }
+
+    /// Fonts are baked into each block's text storage, so a global font change
+    /// must be pushed onto already-open text. Rather than re-decode the whole
+    /// document (which would reset the caret and clear undo), drop the cached
+    /// per-kind fonts and re-font each open text storage in place. Code and
+    /// table segments re-font through their own `updateNSView` passes, which the
+    /// same configuration change triggers.
+    private func reapplyFonts() {
+        BlockTextView.invalidateStyleCaches()
+        controller?.document.restyleTextFonts()
     }
 }
 

@@ -35,6 +35,14 @@ public struct MyaeEditorConfiguration: Sendable {
     /// Whether the document can be edited. `false` = read-only viewer.
     public var isEditable: Bool
 
+    /// Font family name used for body/heading text, or `nil` for the system font.
+    /// Applied process-wide (see `EditorFont`); when several editors are shown
+    /// at once the last configuration written wins.
+    public var fontFamilyName: String?
+    /// Font family name used for code blocks and inline code, or `nil` for the
+    /// system monospaced font. Applied process-wide, like `fontFamilyName`.
+    public var codeFontFamilyName: String?
+
     public init(
         showsTitleField: Bool = true,
         managesWindowTitle: Bool = true,
@@ -46,7 +54,9 @@ public struct MyaeEditorConfiguration: Sendable {
         allowsDragReorder: Bool = true,
         showsBlockActionMenu: Bool = true,
         rendersMermaid: Bool = true,
-        isEditable: Bool = true
+        isEditable: Bool = true,
+        fontFamilyName: String? = nil,
+        codeFontFamilyName: String? = nil
     ) {
         self.showsTitleField = showsTitleField
         self.managesWindowTitle = managesWindowTitle
@@ -59,6 +69,8 @@ public struct MyaeEditorConfiguration: Sendable {
         self.showsBlockActionMenu = showsBlockActionMenu
         self.rendersMermaid = rendersMermaid
         self.isEditable = isEditable
+        self.fontFamilyName = fontFamilyName
+        self.codeFontFamilyName = codeFontFamilyName
     }
 }
 
