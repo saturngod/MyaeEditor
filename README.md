@@ -55,21 +55,24 @@ xcodebuild -project MyaeEditor.xcodeproj -scheme MyaeEditor \
 
 ## Using MyaeEditorKit as a Swift Package
 
-The editor is distributed as a local Swift Package (`MyaeEditorKit/`). You can
-embed it in any macOS 15+ app and `import MyaeEditorKit` to use the
-`MyaeEditor` view.
+The editor is distributed as a Swift Package at the **repository root** — the
+`Package.swift` lives at the top level, not in a subfolder. You can embed it in
+any macOS 15+ app and `import MyaeEditorKit` to use the `MyaeEditor` view.
 
 ### Add the package
 
-**Xcode:** File → Add Package Dependencies → choose the local `MyaeEditorKit`
+**Xcode:** File → Add Package Dependencies → choose the `MyaeEditor` repo
 folder (or its git URL) → add to your target.
 
 **`Package.swift`** (if your app is itself a package):
 
 ```swift
 dependencies: [
-    .package(path: "../MyaeEditor/MyaeEditorKit") // local path
-    // or: .package(url: "https://github.com/your-org/MyaeEditor.git", .branch("main"))
+    .package(url: "https://github.com/saturngod/MyaeEditor.git", .branch("main"))
+    // or, after a tagged release:
+    // .package(url: "https://github.com/saturngod/MyaeEditor.git", .upToNextMajor(from: "0.1.0"))
+    // local checkout:
+    // .package(path: "../MyaeEditor")
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["MyaeEditorKit"])
@@ -112,7 +115,9 @@ The package exports exactly five public types: `MyaeEditor`,
 
 ## Architecture
 
-The editor is a **local Swift Package** (`MyaeEditorKit`) imported by the app. This makes it reusable — any macOS app can `import MyaeEditorKit` and embed a `MyaeEditor` view.
+The editor is a **Swift Package** at the repository root (`Package.swift`),
+imported by the app. This makes it reusable — any macOS app can
+`import MyaeEditorKit` and embed a `MyaeEditor` view.
 
 ```
 MyaeEditor/                    (app target)
@@ -121,30 +126,29 @@ MyaeEditor/                    (app target)
 │   └── ContentView.swift      Window controller + restore policy
 └── Assets.xcassets
 
-MyaeEditorKit/                 (local Swift package)
-├── Package.swift              Swift 5 / macOS 15+
-├── Sources/MyaeEditorKit/
-│   ├── MyaeEditor.swift           ← PUBLIC: two-form editor view
-│   ├── MyaeEditorController.swift ← PUBLIC: document + file I/O
-│   ├── MyaeEditorConfiguration.swift ← PUBLIC: feature flags
-│   ├── MarkdownStore.swift        ← PUBLIC: autosave store
-│   ├── Models/Segments.swift      @Observable Segment (text run / widget), ParagraphKind
-│   │        SegmentDocument.swift Ordered segment list + focus/selection state
-│   │        Models.swift          BlockKind, TableData, ColumnAlignment (shared by segments)
-│   ├── Services/SegmentCodec.swift   Markdown ↔ segments (the real document codec)
-│   │           MarkdownCodec.swift   Inline Markdown ↔ attributed text (bold/italic/links, table rows)
-│   │           SegmentStyle.swift    Paragraph attribute → NSAttributedString styling
-│   │           SyntaxHighlighter.swift Tokenizer + code highlighting
-│   ├── Views/SegmentEditorView       Continuous document surface + widget layout
-│   │      SegmentTextView            Multi-paragraph text run (NSTextView-backed)
-│   │      SegmentWidgets             Code/image/equation/divider widget views
-│   │      BlockTextView              Shared AutoSizingTextView base (bold/italic/code toggles)
-│   │      SlashMenu                  Block type picker
-│   │      FormatBar                  Floating inline-format toolbar
-│   │      TableBlockView, TableCellTextView, InlineMath
-│   │      MermaidWebView, MermaidZoomView  Diagram rendering + zoom/pan viewer (WKWebView)
-│   └── Resources/mermaid.html, mermaid-zoom.html, mermaid.min.js
-└── Tests/MyaeEditorKitTests/
+Package.swift                   (Swift 5 / macOS 15+ — package at repo root)
+Sources/MyaeEditorKit/
+├── MyaeEditor.swift           ← PUBLIC: two-form editor view
+├── MyaeEditorController.swift ← PUBLIC: document + file I/O
+├── MyaeEditorConfiguration.swift ← PUBLIC: feature flags
+├── MarkdownStore.swift        ← PUBLIC: autosave store
+├── Models/Segments.swift      @Observable Segment (text run / widget), ParagraphKind
+│        SegmentDocument.swift Ordered segment list + focus/selection state
+│        Models.swift          BlockKind, TableData, ColumnAlignment (shared by segments)
+├── Services/SegmentCodec.swift   Markdown ↔ segments (the real document codec)
+│           MarkdownCodec.swift   Inline Markdown ↔ attributed text (bold/italic/links, table rows)
+│           SegmentStyle.swift    Paragraph attribute → NSAttributedString styling
+│           SyntaxHighlighter.swift Tokenizer + code highlighting
+├── Views/SegmentEditorView       Continuous document surface + widget layout
+│      SegmentTextView            Multi-paragraph text run (NSTextView-backed)
+│      SegmentWidgets             Code/image/equation/divider widget views
+│      BlockTextView              Shared AutoSizingTextView base (bold/italic/code toggles)
+│      SlashMenu                  Block type picker
+│      FormatBar                  Floating inline-format toolbar
+│      TableBlockView, TableCellTextView, InlineMath
+│      MermaidWebView, MermaidZoomView  Diagram rendering + zoom/pan viewer (WKWebView)
+└── Resources/mermaid.html, mermaid-zoom.html, mermaid.min.js
+Tests/MyaeEditorKitTests/
 ```
 
 ### Using MyaeEditorKit
@@ -294,7 +298,7 @@ The New and Open menu actions are handled in `FileCommands`
 
 ## Tests
 
-- `MyaeEditorKit/Tests/MyaeEditorKitTests/` — package unit tests (`MyaeEditorControllerTests`, `SegmentCodecTests`)
+- `Tests/MyaeEditorKitTests/` — package unit tests (`MyaeEditorControllerTests`, `SegmentCodecTests`)
 - `MyaeEditorTests/` — app smoke tests
 - `MyaeEditorUITests/` — UI tests
 

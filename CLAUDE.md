@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-MyaeEditor is a native macOS block editor (SwiftUI + AppKit) that reads/writes Markdown. Most of the real code lives in a **local Swift Package `MyaeEditorKit`**; the app target (`MyaeEditor/`) is a thin shell around it. Any macOS app can `import MyaeEditorKit` and embed a `MyaeEditor` view.
+MyaeEditor is a native macOS block editor (SwiftUI + AppKit) that reads/writes Markdown. Most of the real code lives in a **Swift Package `MyaeEditorKit` at the repository root** (the `Package.swift` is at the top level); the app target (`MyaeEditor/`) is a thin shell around it. Any macOS app can `import MyaeEditorKit` and embed a `MyaeEditor` view.
 
 ## Commands
 
@@ -29,7 +29,7 @@ Build a release `.dmg` (needs `brew install create-dmg`):
 ./build.sh 1.2          # -> MyaeEditor-1.2.dmg
 ```
 
-The app's own test targets (`MyaeEditorTests`, `MyaeEditorUITests`) are placeholders — `MyaeEditorTests/SmokeTests.swift` only asserts the target builds. Put new tests in `MyaeEditorKit/Tests/MyaeEditorKitTests/` and run with `swift test`.
+The app's own test targets (`MyaeEditorTests`, `MyaeEditorUITests`) are placeholders — `MyaeEditorTests/SmokeTests.swift` only asserts the target builds. Put new tests in `Tests/MyaeEditorKitTests/` and run with `swift test`.
 
 ## Architecture
 
