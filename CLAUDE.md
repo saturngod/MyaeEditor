@@ -45,6 +45,18 @@ Markdown conversion is centralized in `Services/MarkdownCodec.swift` (blocks ↔
 
 Views (`Views/`): `EditorView` is the document surface; `BlockRowView` renders one block and handles drag/multi-select; `BlockTextView` is the `NSTextView`-backed text input. Specialized block views: `TableBlockView`, `ImageBlockView`, `InlineMath`, `MermaidBlockView` (+ `MermaidWebView`, a WKWebView). Chrome: `SlashMenu`, `FormatBar`, `BlockActionMenu`.
 
+## Line height & cursor centering
+
+Vertical centering of text **and the caret** is done with geometry, not text attributes: `Views/CenteringLayoutManager.swift` (TextKit 1, `NSLayoutManagerDelegate` on itself).
+
+- `shouldSetLineFragmentRect` forces every line fragment to a fixed height — `BlockTextView.lineHeightMultiple(for:) × defaultLineHeight(baseFont)` per paragraph kind (read from the `.paragraphKind` attribute) — and sets `baselineOffset` so the base font's ascender→descender box is centered in the fragment. AppKit derives the insertion point from that reported baseline, so the caret centers for free.
+- Height always comes from the kind's **base font**, never the rendered fonts — Myanmar/CJK fallback fonts can't change line height or move the caret.
+- `setExtraLineFragmentRect` override fixes the empty last line.
+- Lines containing attachments (inline math) are left to default layout (`return false`) so they aren't clipped.
+- Views whose storage has no `.paragraphKind` (table cells, code widget) set `overrideFont`/`overrideMultiple` on the layout manager instead.
+- It is installed with `tv.textContainer?.replaceLayoutManager(CenteringLayoutManager())` **before** any storage swap, in three places: `SegmentTextView.makeNSView`, `TableCellTextView.makeNSView`, `CodeSegmentEditor.makeNSView`. Any new NSTextView-based editor surface must do the same.
+- Do NOT reintroduce `.baselineOffset` attributes or `lineSpacing` for centering — marker drawing (`SegmentNSTextView.drawMarkers`) assumes the fixed-fragment geometry and reads `BlockTextView.centeringShift(for:)` = `(fixedHeight − fontLineHeight)/2` to align bullets/numbers/checkboxes; strikethrough and the quote bar use the used rect's `midY`/full height directly.
+
 ## Conventions & gotchas
 
 - Package builds in **Swift 5 language mode** with `defaultIsolation(MainActor.self)` — most types are implicitly main-actor isolated.
