@@ -67,6 +67,25 @@ enum BlockTextView {
     /// own but should read the same as a wrapped paragraph.
     static let paragraphLineSpacing: CGFloat = 10
 
+    /// Fixed line-height multiple per kind, applied by `CenteringLayoutManager`:
+    /// fragment height = multiple × defaultLineHeight(kind.baseFont), with the
+    /// baseline centered inside. Values chosen to match the previous
+    /// lineSpacing/lineHeightMultiple metrics per kind.
+    static func lineHeightMultiple(for kind: BlockKind) -> CGFloat {
+        switch kind {
+        case .heading1: return 1.2
+        case .heading2: return 1.25
+        case .heading3, .heading4, .heading5, .heading6: return 1.3
+        case .code: return 1.45
+        case .quote: return 1.3
+        default: return 1.5
+        }
+    }
+
+    /// Shared metrics-only layout manager for `defaultLineHeight(for:)` lookups
+    /// outside a live text view.
+    private static let metricsLayoutManager = NSLayoutManager()
+
     /// Cache of the per-kind typing attributes — constant per kind; rebuilt
     /// paragraph styles on every call would be wasted work. Main-thread only.
     private static var typingAttributesCache: [BlockKind: [NSAttributedString.Key: Any]] = [:]
@@ -112,34 +131,28 @@ enum BlockTextView {
         }
         var color: NSColor = .textColor
         if kind == .quote { color = .secondaryLabelColor }
-        var attrs: [NSAttributedString.Key: Any] = [
+        let attrs: [NSAttributedString.Key: Any] = [
             .font: kind.baseFont,
             .foregroundColor: color,
             .paragraphStyle: para,
         ]
-        // `lineSpacing` piles all its extra room *below* the glyphs, pinning text to
-        // the top of the (taller) line and reading as top-aligned against the
-        // full-height caret. A `.baselineOffset` of half that spacing drops the
-        // glyphs to the visual center of the line — and of the caret — without
-        // touching any layout metric (line-fragment rect, used rect, caret rect),
-        // so it applies identically under TextKit 1 and TextKit 2, unlike an
-        // `NSLayoutManagerDelegate` hook (which a TextKit-2-backed text view, e.g. a
-        // freshly created table-cell view, may simply never invoke). Marker/pill
-        // drawing reads this same value back via `centeringShift(for:)` to stay
-        // glued to the now-lower glyphs.
-        if para.lineSpacing > 0 { attrs[.baselineOffset] = para.lineSpacing / 2 }
+        // Vertical centering is NOT done with a `.baselineOffset` attribute —
+        // `CenteringLayoutManager` forces fixed-height line fragments per kind
+        // and centers the baseline inside them, which also centers the caret
+        // and keeps line height stable under Myanmar/CJK fallback fonts.
         typingAttributesCache[kind] = attrs
         return attrs
     }
 
-    /// Half of a paragraph's `lineSpacing` — the amount its glyphs are nudged down
-    /// (via the `.baselineOffset` attribute above) so they sit centered in the
-    /// (taller) line instead of pinned to the top. Marker/pill drawing adds this
-    /// back because they measure from the unshifted layout rects. Zero for kinds
-    /// that don't use `lineSpacing` (headings/code).
+    /// Distance from a line fragment's used-rect top to the glyphs' visual top
+    /// under `CenteringLayoutManager`'s fixed-height fragments:
+    /// (fixedHeight − baseFontLineHeight) / 2. Marker drawing adds this so
+    /// bullets/numbers/checkboxes sit on the (centered) glyphs.
     static func centeringShift(for kind: BlockKind) -> CGFloat {
         if let cached = centeringShiftCache[kind] { return cached }
-        let shift = (typingAttributes(for: kind)[.baselineOffset] as? CGFloat) ?? 0
+        let fontLine = metricsLayoutManager.defaultLineHeight(for: kind.baseFont)
+        let fixed = ceil(lineHeightMultiple(for: kind) * fontLine)
+        let shift = (fixed - fontLine) / 2
         centeringShiftCache[kind] = shift
         return shift
     }

@@ -95,6 +95,9 @@ struct SegmentTextView: NSViewRepresentable {
         tv.textContainer?.widthTracksTextView = true
         tv.textContainer?.heightTracksTextView = false
         tv.placeholder = "Type '/' for commands"
+        // Fixed-height, baseline-centered line fragments (and a centered caret) —
+        // see CenteringLayoutManager. Must be installed before the storage swap.
+        tv.textContainer?.replaceLayoutManager(CenteringLayoutManager())
         // Attach the shared storage: edits land straight in the segment's model.
         tv.layoutManager?.replaceTextStorage(storage)
         tv.typingAttributes = SegmentStyle.attributes(for: .paragraph)
@@ -941,12 +944,12 @@ final class SegmentNSTextView: AutoSizingTextView {
             case .bulleted, .numbered, .todo, .quote: break
             default: continue
             }
-            var lineRect = firstLineUsedRect(forParagraphAt: pStart, lm: lm)
-            // Glyphs are nudged down by half the line spacing to center them in the
-            // line (see `AutoSizingTextView`'s layout-manager delegate). Markers read
-            // the unshifted used rect, so add the same shift to keep them on the text.
+            let lineRect = firstLineUsedRect(forParagraphAt: pStart, lm: lm)
+            // Under `CenteringLayoutManager` the used rect is the full fixed-height
+            // fragment with the glyphs centered inside it — the glyphs' visual top
+            // sits `shift` below the used rect's top. Markers drawn from the top
+            // must add it; anything centered (strikethrough) uses midY directly.
             let shift = BlockTextView.centeringShift(for: pk.kind)
-            lineRect.origin.y += shift
             let indentX = origin.x + CGFloat(pk.depth) * SegmentStyle.indentPerLevel
             let font = pk.kind.baseFont
 
@@ -958,7 +961,7 @@ final class SegmentNSTextView: AutoSizingTextView {
                                              actualCharacterRange: nil)
                     barRect = lm.boundingRect(forGlyphRange: full, in: tc)
                     barRect.origin.x += origin.x
-                    barRect.origin.y += origin.y + shift
+                    barRect.origin.y += origin.y
                 }
                 let bar = NSRect(x: indentX + 2, y: barRect.minY, width: 3, height: max(barRect.height, lineRect.height))
                 NSColor.separatorColor.setFill()
@@ -966,13 +969,13 @@ final class SegmentNSTextView: AutoSizingTextView {
             case .bulleted:
                 let glyphs = ["•", "◦", "▪"]
                 let g = glyphs[min(pk.depth, glyphs.count - 1)]
-                drawMarkerText(g, at: NSPoint(x: indentX + 2, y: lineRect.minY), font: font)
+                drawMarkerText(g, at: NSPoint(x: indentX + 2, y: lineRect.minY + shift), font: font)
             case .numbered:
                 let n = numbering[pStart] ?? 1
-                drawMarkerText("\(n).", at: NSPoint(x: indentX + 2, y: lineRect.minY), font: font)
+                drawMarkerText("\(n).", at: NSPoint(x: indentX + 2, y: lineRect.minY + shift), font: font)
             case .todo:
                 let symbol = pk.checked ? "checkmark.square.fill" : "square"
-                let box = NSRect(x: indentX + 2, y: lineRect.minY + 1, width: 15, height: 15)
+                let box = NSRect(x: indentX + 2, y: lineRect.minY + shift + 1, width: 15, height: 15)
                 if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
                     let tint = pk.checked ? NSColor.controlAccentColor : NSColor.secondaryLabelColor
                     img.withSymbolConfiguration(.init(pointSize: 13, weight: .regular))?
@@ -988,7 +991,7 @@ final class SegmentNSTextView: AutoSizingTextView {
                     lm.enumerateLineFragments(forGlyphRange: gr) { _, usedRect, _, _, _ in
                         var ur = usedRect
                         ur.origin.x += origin.x
-                        ur.origin.y += origin.y + shift
+                        ur.origin.y += origin.y
                         let p = NSBezierPath()
                         p.move(to: NSPoint(x: ur.minX, y: ur.midY))
                         p.line(to: NSPoint(x: ur.maxX, y: ur.midY))
