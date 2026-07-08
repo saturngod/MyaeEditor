@@ -53,6 +53,63 @@ xcodebuild -project MyaeEditor.xcodeproj -scheme MyaeEditor \
   -destination 'platform=macOS' build
 ```
 
+## Using MyaeEditorKit as a Swift Package
+
+The editor is distributed as a local Swift Package (`MyaeEditorKit/`). You can
+embed it in any macOS 15+ app and `import MyaeEditorKit` to use the
+`MyaeEditor` view.
+
+### Add the package
+
+**Xcode:** File → Add Package Dependencies → choose the local `MyaeEditorKit`
+folder (or its git URL) → add to your target.
+
+**`Package.swift`** (if your app is itself a package):
+
+```swift
+dependencies: [
+    .package(path: "../MyaeEditor/MyaeEditorKit") // local path
+    // or: .package(url: "https://github.com/your-org/MyaeEditor.git", .branch("main"))
+],
+targets: [
+    .target(name: "YourApp", dependencies: ["MyaeEditorKit"])
+]
+```
+
+> Requirements: macOS 15+ (package), Xcode 16+, Swift 5 language mode. The
+> package bundles `mermaid.min.js` and its HTML resources, so Mermaid rendering
+> works out of the box — no extra asset copying needed.
+
+### Use the editor
+
+```swift
+import SwiftUI
+import MyaeEditorKit
+
+struct ContentView: View {
+    // Full control: your app owns the document state + file I/O
+    @State private var controller = MyaeEditorController(autosave: .default)
+
+    // Simple: bind directly to a Markdown string (internal controller)
+    @State private var text: String = "# Hello\n\nStart typing…"
+
+    var body: some View {
+        VStack {
+            MyaeEditor(controller: controller)   // app-owned controller
+            // or: MyaeEditor(markdown: $text)  // string binding
+        }
+        .onAppear {
+            controller.onChange = { _ in print("Edited") }
+            controller.onSave   = { url in print("Saved to \(url)") }
+        }
+    }
+}
+```
+
+The package exports exactly five public types: `MyaeEditor`,
+`MyaeEditorController`, `MyaeEditorConfiguration`, `MarkdownStore`, and
+`AutosavePolicy`. Everything else is `internal`.
+
 ## Architecture
 
 The editor is a **local Swift Package** (`MyaeEditorKit`) imported by the app. This makes it reusable — any macOS app can `import MyaeEditorKit` and embed a `MyaeEditor` view.
