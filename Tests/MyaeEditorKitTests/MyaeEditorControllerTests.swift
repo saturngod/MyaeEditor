@@ -40,6 +40,105 @@ struct MyaeEditorControllerTests {
         #expect(onDisk.contains("Body"))
     }
 
+    @Test func asyncSaveWritesFileAndBindsAfterCompletion() async throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("async-note.md")
+        let controller = MyaeEditorController(markdown: "# Async\n\nBody")
+
+        #expect(await controller.saveAsync(to: url))
+        #expect(controller.fileURL == url)
+        #expect(!controller.isDirty)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "# Async\n\nBody")
+    }
+
+    @Test func editDuringAsyncSaveRemainsDirty() async throws {
+        let dir = tempDir()
+        let url = dir.appendingPathComponent("large.md")
+        let content = String(repeating: "A reasonably long line of Markdown.\n", count: 2_000)
+        let controller = MyaeEditorController(markdown: content)
+        controller.beforeAsyncWriteForTesting = { try? await Task.sleep(for: .milliseconds(40)) }
+        controller.document.markEdited()
+
+        let save = Task { await controller.saveAsync(to: url) }
+        while !controller.isSaving { await Task.yield() }
+        controller.document.markEdited()
+
+        #expect(await save.value)
+        #expect(controller.isDirty)
+    }
+
+    @Test func loadSupersedesAsyncSaveStateUpdate() async throws {
+        let dir = tempDir()
+        let saveURL = dir.appendingPathComponent("old.md")
+        let loadURL = dir.appendingPathComponent("new.md")
+        try "new document".write(to: loadURL, atomically: true, encoding: .utf8)
+        let content = String(repeating: "old document line\n", count: 2_000)
+        let controller = MyaeEditorController(markdown: content)
+        controller.beforeAsyncWriteForTesting = { try? await Task.sleep(for: .milliseconds(40)) }
+
+        let save = Task { await controller.saveAsync(to: saveURL) }
+        while !controller.isSaving { await Task.yield() }
+        try controller.load(from: loadURL)
+
+        #expect(await save.value == false)
+        #expect(controller.fileURL == loadURL)
+        #expect(controller.markdown == "new document")
+    }
+
+    @Test func failedLoadDoesNotSupersedeAsyncSave() async throws {
+        let dir = tempDir()
+        let saveURL = dir.appendingPathComponent("saved.md")
+        let missingURL = dir.appendingPathComponent("missing.md")
+        let controller = MyaeEditorController(markdown: "content to save")
+        controller.beforeAsyncWriteForTesting = { try? await Task.sleep(for: .milliseconds(40)) }
+
+        let save = Task { await controller.saveAsync(to: saveURL) }
+        while !controller.isSaving { await Task.yield() }
+
+        var loadFailed = false
+        do {
+            try controller.load(from: missingURL)
+        } catch {
+            loadFailed = true
+        }
+
+        #expect(loadFailed)
+        #expect(await save.value)
+        #expect(controller.fileURL == saveURL)
+        #expect(try String(contentsOf: saveURL, encoding: .utf8) == "content to save")
+    }
+
+    @Test func autosaveToOldURLDoesNotCleanConcurrentSaveAs() async throws {
+        let dir = tempDir()
+        let oldURL = dir.appendingPathComponent("old.md")
+        let newURL = dir.appendingPathComponent("new.md")
+        try "before edit".write(to: oldURL, atomically: true, encoding: .utf8)
+        let controller = try MyaeEditorController(
+            contentsOf: oldURL,
+            autosave: .enabled(debounce: 60, store: nil)
+        )
+        controller.beforeAsyncWriteForTesting = { try? await Task.sleep(for: .milliseconds(40)) }
+
+        let saveAs = Task { await controller.saveAsync(to: newURL) }
+        while !controller.isSaving { await Task.yield() }
+        guard let storage = controller.document.segments.first?.textStorage else {
+            Issue.record("expected text storage")
+            return
+        }
+        storage.setAttributedString(NSAttributedString(string: "edit during save as"))
+        controller.document.markEdited()
+        controller.settleEditsForTesting()
+
+        #expect(await saveAs.value)
+        controller.flushPendingWrites()
+        await Task.yield()
+
+        #expect(controller.fileURL == newURL)
+        #expect(controller.isDirty)
+        #expect(try String(contentsOf: newURL, encoding: .utf8) == "before edit")
+        #expect(try String(contentsOf: oldURL, encoding: .utf8) == "edit during save as")
+    }
+
     @Test func loadFromReadsFileAndTitle() throws {
         let dir = tempDir()
         let url = dir.appendingPathComponent("MyDoc.md")

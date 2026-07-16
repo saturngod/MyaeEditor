@@ -18,6 +18,39 @@ enum MermaidTheme: String {
     init(_ scheme: ColorScheme) { self = scheme == .dark ? .dark : .light }
 }
 
+/// Cross-block cache of Mermaid's expensive parse/render result. Height is not
+/// cached because the same responsive SVG can be installed at different editor
+/// widths and measured cheaply in each web view.
+enum MermaidRenderCache {
+    struct Key: Hashable {
+        let source: String
+        let theme: MermaidTheme
+        let rendererVersion = "11.16.0"
+    }
+
+    private static var values: [Key: String] = [:]
+    private static var order: [Key] = []
+    private static let limit = 64
+
+    static func value(for key: Key) -> String? { values[key] }
+
+    static func insert(_ svg: String, for key: Key) {
+        if values[key] == nil { order.append(key) }
+        values[key] = svg
+        while order.count > limit {
+            let oldest = order.removeFirst()
+            values.removeValue(forKey: oldest)
+        }
+    }
+
+    static func removeAll() {
+        values.removeAll()
+        order.removeAll()
+    }
+
+    static var count: Int { values.count }
+}
+
 /// A WKWebView that forwards scroll-wheel events up the responder chain, so the
 /// document keeps scrolling when the pointer is over an inline diagram. A plain
 /// WKWebView swallows the gesture (its own scroll view eats it), trapping the
@@ -90,14 +123,30 @@ struct MermaidWebView: NSViewRepresentable {
         }
 
         private func render(web: WKWebView, req: (source: String, theme: MermaidTheme, bg: String)) async {
+            let trace = PerformanceTrace.begin("MermaidRender")
+            defer { PerformanceTrace.end("MermaidRender", trace) }
             do {
-                let result = try await web.callAsyncJavaScript(
-                    "return await renderMermaid(code, theme, bg);",
-                    arguments: ["code": req.source, "theme": req.theme.rawValue, "bg": req.bg],
-                    contentWorld: .page)
-                let h = (result as? Double) ?? (result as? NSNumber)?.doubleValue ?? 0
+                let cacheKey = MermaidRenderCache.Key(source: req.source, theme: req.theme)
+                let height: Double
+                if let svg = MermaidRenderCache.value(for: cacheKey) {
+                    let result = try await web.callAsyncJavaScript(
+                        "return await installMermaid(svg, bg);",
+                        arguments: ["svg": svg, "bg": req.bg],
+                        contentWorld: .page)
+                    height = (result as? Double) ?? (result as? NSNumber)?.doubleValue ?? 0
+                } else {
+                    let result = try await web.callAsyncJavaScript(
+                        "return await renderMermaid(code, theme, bg);",
+                        arguments: ["code": req.source, "theme": req.theme.rawValue, "bg": req.bg],
+                        contentWorld: .page)
+                    let dictionary = result as? [String: Any]
+                    let svg = dictionary?["svg"] as? String
+                    height = (dictionary?["height"] as? Double)
+                        ?? (dictionary?["height"] as? NSNumber)?.doubleValue ?? 0
+                    if let svg { MermaidRenderCache.insert(svg, for: cacheKey) }
+                }
                 parent.errorMessage = nil
-                parent.height = max(1, CGFloat(h))
+                parent.height = max(1, CGFloat(height))
             } catch {
                 let ns = error as NSError
                 let jsMsg = ns.userInfo["WKJavaScriptExceptionMessage"] as? String

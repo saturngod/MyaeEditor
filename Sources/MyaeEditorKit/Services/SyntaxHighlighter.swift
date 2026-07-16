@@ -239,22 +239,24 @@ enum SyntaxHighlighter {
     /// so we fall back to a full pass. Omit `editedRange` (or pass nil) for the
     /// initial paint, a paste, or a language change to force a full pass.
     static func highlight(_ storage: NSTextStorage, language: CodeLanguage, font: NSFont, editedRange: NSRange? = nil) {
-        let s = storage.string as NSString
-        let scan = scanRange(s, editedRange, language)
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = 1.45
+        PerformanceTrace.measure("SyntaxHighlight") {
+            let s = storage.string as NSString
+            let scan = scanRange(s, editedRange, language)
+            let para = NSMutableParagraphStyle()
+            para.lineHeightMultiple = 1.45
 
-        storage.beginEditing()
-        storage.setAttributes(
-            [.font: font, .foregroundColor: NSColor.textColor, .paragraphStyle: para],
-            range: scan)
-        if language != .plain {
-            for (range, kind) in tokens(in: s, language: language, scan: scan)
-            where NSIntersectionRange(range, scan).length > 0 {
-                storage.addAttribute(.foregroundColor, value: kind.color, range: range)
+            storage.beginEditing()
+            storage.setAttributes(
+                [.font: font, .foregroundColor: NSColor.textColor, .paragraphStyle: para],
+                range: scan)
+            if language != .plain {
+                for (range, kind) in tokens(in: s, language: language, scan: scan)
+                where NSIntersectionRange(range, scan).length > 0 {
+                    storage.addAttribute(.foregroundColor, value: kind.color, range: range)
+                }
             }
+            storage.endEditing()
         }
-        storage.endEditing()
     }
 
     /// The character range to re-scan: the edited line(s), or the whole string
@@ -263,11 +265,32 @@ enum SyntaxHighlighter {
         let full = NSRange(location: 0, length: s.length)
         guard let edited, edited.location != NSNotFound, edited.location <= s.length else { return full }
         let clamped = NSRange(location: edited.location, length: min(edited.length, s.length - edited.location))
-        let line = s.lineRange(for: clamped)
+        var line = s.lineRange(for: clamped)
         let text = s.substring(with: line)
         // Multi-line constructs can change coloring past the edited line.
         if let bc = language.blockComment, text.contains(bc.open) || text.contains(bc.close) { return full }
         if language.stringDelimiters.contains("`"), text.contains("`") { return full }
+
+        // When the edited line sits inside an existing block comment, begin at
+        // the unmatched opener and continue through its closer. This remains
+        // incremental for a large file while producing the same state as a full
+        // scan (starting at the edited line alone would color comment text as code).
+        if let bc = language.blockComment, line.location > 0 {
+            let prefix = NSRange(location: 0, length: line.location)
+            let lastOpen = s.range(of: bc.open, options: .backwards, range: prefix)
+            let lastClose = s.range(of: bc.close, options: .backwards, range: prefix)
+            if lastOpen.location != NSNotFound,
+               lastClose.location == NSNotFound || lastOpen.location > lastClose.location {
+                let start = s.lineRange(for: NSRange(location: lastOpen.location, length: 0)).location
+                let afterLine = line.location + line.length
+                let suffix = NSRange(location: afterLine, length: max(0, s.length - afterLine))
+                let nextClose = s.range(of: bc.close, options: [], range: suffix)
+                let end = nextClose.location == NSNotFound
+                    ? s.length
+                    : NSMaxRange(s.lineRange(for: nextClose))
+                line = NSRange(location: start, length: end - start)
+            }
+        }
         return line
     }
 
@@ -291,7 +314,7 @@ enum SyntaxHighlighter {
     /// multi-line construct crosses the boundary in the incremental path.
     private static func tokens(in s: NSString, language: CodeLanguage, scan: NSRange) -> [(NSRange, TokenKind)] {
         // CSS doesn't fit the keyword model — use a dedicated regex pass.
-        if language == .css { return cssTokens(in: s) }
+        if language == .css { return cssTokens(in: s, scan: scan) }
 
         var result: [(NSRange, TokenKind)] = []
         let end = scan.location + scan.length
@@ -375,7 +398,7 @@ enum SyntaxHighlighter {
 
         // Light HTML tag coloring on top of the generic pass.
         if language == .html {
-            highlightHTMLTags(in: s, into: &result)
+            highlightHTMLTags(in: s, scan: scan, into: &result)
         }
         return result
     }
@@ -407,14 +430,13 @@ enum SyntaxHighlighter {
     private static let htmlTagRegex = try? NSRegularExpression(pattern: "</?[A-Za-z][\\w:-]*")
 
     /// CSS: comments, strings, at-rules, hex colors, selectors, properties, units.
-    private static func cssTokens(in s: NSString) -> [(NSRange, TokenKind)] {
+    private static func cssTokens(in s: NSString, scan: NSRange) -> [(NSRange, TokenKind)] {
         var result: [(NSRange, TokenKind)] = []
         var covered = IndexSet()
-        let whole = NSRange(location: 0, length: s.length)
         let str = s as String
 
         for rule in cssRules {
-            for m in rule.regex.matches(in: str, range: whole) {
+            for m in rule.regex.matches(in: str, range: scan) {
                 let r = m.range
                 guard r.location != NSNotFound, r.length > 0 else { continue }
                 let candidate = IndexSet(integersIn: r.location ..< (r.location + r.length))
@@ -426,9 +448,10 @@ enum SyntaxHighlighter {
         return result
     }
 
-    private static func highlightHTMLTags(in s: NSString, into result: inout [(NSRange, TokenKind)]) {
+    private static func highlightHTMLTags(in s: NSString, scan: NSRange,
+                                          into result: inout [(NSRange, TokenKind)]) {
         guard let regex = htmlTagRegex else { return }
-        regex.enumerateMatches(in: s as String, range: NSRange(location: 0, length: s.length)) { m, _, _ in
+        regex.enumerateMatches(in: s as String, range: scan) { m, _, _ in
             if let r = m?.range { result.append((r, .keyword)) }
         }
     }

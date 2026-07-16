@@ -71,6 +71,9 @@ public final class MyaeEditorController {
     /// `true` when there are edits not yet written to `fileURL` (or the store).
     public private(set) var isDirty: Bool = false
 
+    /// True while a user-initiated asynchronous save is in flight.
+    public private(set) var isSaving: Bool = false
+
     /// Read or replace the whole document as Markdown. Setting decodes and
     /// replaces the blocks (normalizing via a re-encode); it does not touch
     /// `fileURL`.
@@ -83,6 +86,10 @@ public final class MyaeEditorController {
 
     /// Fired after edits settle (debounced), with the controller.
     @ObservationIgnored public var onChange: ((MyaeEditorController) -> Void)?
+    /// Internal value callback used by the binding-backed view. It receives the
+    /// exact snapshot already produced by `editsSettled`, avoiding a second
+    /// complete encode through the public `markdown` getter.
+    @ObservationIgnored var onSettledMarkdown: ((String) -> Void)?
     /// Fired after a document is opened from a URL.
     @ObservationIgnored public var onOpen: ((URL) -> Void)?
     /// Fired after a save. The URL is `nil` when the write went to the autosave store.
@@ -105,6 +112,11 @@ public final class MyaeEditorController {
 
     @ObservationIgnored private var cancellables: Set<AnyCancellable> = []
     @ObservationIgnored private var terminateObserver: NSObjectProtocol?
+    @ObservationIgnored private var editGeneration: UInt64 = 0
+    @ObservationIgnored private var manualSaveRequestID: UUID?
+    @ObservationIgnored private var manualSaveDestinationURL: URL?
+    /// Test seam for holding an async save between snapshotting and disk I/O.
+    @ObservationIgnored var beforeAsyncWriteForTesting: (() async -> Void)?
 
     // MARK: Lifecycle
 
@@ -169,6 +181,7 @@ public final class MyaeEditorController {
 
     /// Reset to an empty document, dropping the file binding.
     public func newDocument() {
+        invalidatePendingManualSave()
         fileURL = nil
         document.replaceAll(MyaeEditorController.blankSegments())
         configureImageBase()
@@ -180,6 +193,9 @@ public final class MyaeEditorController {
     /// Load a `.md` file into this controller.
     public func load(from url: URL) throws {
         let text = try String(contentsOf: url, encoding: .utf8)
+        // A failed read must leave an in-flight save alone. Only supersede it
+        // once replacement content is available and the load can commit.
+        invalidatePendingManualSave()
         fileURL = url
         document.imageFileDirectory = url.deletingLastPathComponent()   // before decode → images resolve
         document.replaceAll(SegmentCodec.decode(text))
@@ -203,27 +219,75 @@ public final class MyaeEditorController {
         save(to: url)
     }
 
+    /// Non-blocking counterpart to `save()`. UI clients should prefer this path
+    /// so serialization and disk I/O run on the controller's ordered utility
+    /// queue rather than holding the main actor.
+    @discardableResult
+    public func saveAsync() async -> Bool {
+        guard !isSaving else { return false }
+        if let url = fileURL { return await performAsyncSave(to: url) }
+        guard let url = presentSavePanel() else { return false }
+        return await performAsyncSave(to: url)
+    }
+
     /// Save to a specific URL, binding the document to it on success. Returns
     /// `false` (and leaves the document dirty and unbound) when the write fails.
     @discardableResult
     public func save(to url: URL) -> Bool {
+        invalidatePendingManualSave()
         let markdown = SegmentCodec.encode(document.segments)
         // Through the serial queue so an older queued autosave can never land
         // after (and overwrite) this newer manual save.
         var ok = false
         MyaeEditorController.saveQueue.sync {
-            do {
-                try markdown.write(to: url, atomically: true, encoding: .utf8)
-                ok = true
-            } catch {
-                NSLog("[MyaeEditorController] Save failed: %@", error.localizedDescription)
+            ok = MyaeEditorController.write(markdown, to: url, store: nil)
+        }
+        return finishManualSave(markdown, to: url, succeeded: ok, clearDirty: true)
+    }
+
+    /// Encode on the main actor, then write on the serial save queue without
+    /// blocking UI work. State and callbacks are updated after the write lands.
+    @discardableResult
+    public func saveAsync(to url: URL) async -> Bool {
+        guard !isSaving else { return false }
+        return await performAsyncSave(to: url)
+    }
+
+    private func performAsyncSave(to url: URL) async -> Bool {
+        isSaving = true
+        let requestID = UUID()
+        manualSaveRequestID = requestID
+        manualSaveDestinationURL = url
+        let startingGeneration = editGeneration
+        let markdown = SegmentCodec.encode(document.segments)
+        if let beforeAsyncWriteForTesting { await beforeAsyncWriteForTesting() }
+        defer {
+            if manualSaveRequestID == requestID {
+                manualSaveRequestID = nil
+                manualSaveDestinationURL = nil
+                isSaving = false
             }
         }
-        guard ok else { return false }
+        let ok = await withCheckedContinuation { continuation in
+            MyaeEditorController.saveQueue.async {
+                let result = MyaeEditorController.write(markdown, to: url, store: nil)
+                continuation.resume(returning: result)
+            }
+        }
+        // A load/new action can supersede an in-flight write. The queued write
+        // still lands at its requested URL, but must not rebind the new document.
+        guard manualSaveRequestID == requestID else { return false }
+        return finishManualSave(markdown, to: url, succeeded: ok,
+                                clearDirty: editGeneration == startingGeneration)
+    }
+
+    private func finishManualSave(_ markdown: String, to url: URL,
+                                  succeeded: Bool, clearDirty: Bool) -> Bool {
+        guard succeeded else { return false }
         fileURL = url
         document.imageFileDirectory = url.deletingLastPathComponent()
         lastSaved = markdown
-        setDirty(false)
+        if clearDirty { setDirty(false) }
         onSave?(url)
         return true
     }
@@ -232,12 +296,26 @@ public final class MyaeEditorController {
     /// `nil` when cancelled or when the write fails.
     @discardableResult
     public func saveAsWithPanel() -> URL? {
+        guard let url = presentSavePanel() else { return nil }
+        return save(to: url) ? url : nil
+    }
+
+    /// Non-blocking write variant of `saveAsWithPanel()`. The panel itself is
+    /// necessarily modal; after selection, disk I/O leaves the main actor.
+    @discardableResult
+    public func saveAsWithPanelAsync() async -> URL? {
+        guard !isSaving else { return nil }
+        guard let url = presentSavePanel() else { return nil }
+        return await performAsyncSave(to: url) ? url : nil
+    }
+
+    private func presentSavePanel() -> URL? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = fileURL?.lastPathComponent ?? "document.md"
         panel.allowedContentTypes = [.markdown]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        return save(to: url) ? url : nil
+        return url
     }
 
     /// Block until every queued write (including any in-flight autosave) lands on
@@ -262,7 +340,11 @@ public final class MyaeEditorController {
     private func observeEdits() {
         // Any content mutation marks the document dirty (cheap — no encode).
         document.didEdit
-            .sink { [weak self] in self?.setDirty(true) }
+            .sink { [weak self] in
+                guard let self else { return }
+                self.editGeneration &+= 1
+                self.setDirty(true)
+            }
             .store(in: &cancellables)
     }
 
@@ -298,7 +380,9 @@ public final class MyaeEditorController {
     /// changed. `encode` reads the live `@Observable` blocks, so it runs on the
     /// main actor; only the write is handed to `saveQueue`.
     private func editsSettled(synchronous: Bool = false) {
+        let startingGeneration = editGeneration
         let markdown = SegmentCodec.encode(document.segments)
+        onSettledMarkdown?(markdown)
         onChange?(self)
         guard markdown != lastSaved else {
             setDirty(false)   // edits round-tripped back to the saved text
@@ -311,12 +395,24 @@ public final class MyaeEditorController {
         lastSaved = markdown
         let url = fileURL
         let store = autosave.store
+        // Save As does not rebind `fileURL` until its write completes. Remember
+        // its destination so an autosave aimed at the old URL cannot later mark
+        // the newly-bound file clean.
+        let overlappingManualDestination = manualSaveRequestID == nil
+            ? nil : manualSaveDestinationURL
         // Only clear the dirty flag (and announce the save) once the write has
         // actually landed; a failed write stays dirty and retries on next settle.
         let finish: (Bool) -> Void = { [weak self] ok in
             guard let self else { return }
+            let destinationIsCurrent = self.fileURL == url
+            let isNotSupersededBySaveAs = overlappingManualDestination == nil
+                || overlappingManualDestination == url
+            guard destinationIsCurrent, isNotSupersededBySaveAs else { return }
             if ok {
-                self.setDirty(false)
+                // A manual save can complete between the autosave snapshot and
+                // this callback, replacing `lastSaved` with its older snapshot.
+                self.lastSaved = markdown
+                if self.editGeneration == startingGeneration { self.setDirty(false) }
                 self.onSave?(url)
             } else {
                 self.lastSaved = ""   // force the next settle to retry the write
@@ -338,6 +434,11 @@ public final class MyaeEditorController {
         }
     }
 
+    /// Deterministic test seam for the debounced settle path.
+    func settleEditsForTesting() {
+        editsSettled()
+    }
+
     private func setDirty(_ value: Bool) {
         guard isDirty != value else { return }
         isDirty = value
@@ -347,6 +448,7 @@ public final class MyaeEditorController {
     // MARK: Content loading (binding form)
 
     private func loadContent(_ markdown: String) {
+        invalidatePendingManualSave()
         document.replaceAll(SegmentCodec.decode(markdown))
         lastSaved = SegmentCodec.encode(document.segments)
         setDirty(false)
@@ -355,6 +457,12 @@ public final class MyaeEditorController {
     private func configureImageBase() {
         document.imageFileDirectory = nil
         document.imageFallbackDirectory = autosave.store?.directory ?? MarkdownStore.default.directory
+    }
+
+    private func invalidatePendingManualSave() {
+        manualSaveRequestID = nil
+        manualSaveDestinationURL = nil
+        isSaving = false
     }
 
     // MARK: Disk writes
@@ -369,17 +477,19 @@ public final class MyaeEditorController {
     nonisolated private static func write(_ markdown: String,
                                           to url: URL?,
                                           store: MarkdownStore?) -> Bool {
-        if let url {
-            do {
-                try markdown.write(to: url, atomically: true, encoding: .utf8)
-                return true
-            } catch {
-                NSLog("[MyaeEditorController] Autosave failed: %@", error.localizedDescription)
-                return false
+        PerformanceTrace.measure("DocumentWrite") {
+            if let url {
+                do {
+                    try markdown.write(to: url, atomically: true, encoding: .utf8)
+                    return true
+                } catch {
+                    NSLog("[MyaeEditorController] Write failed: %@", error.localizedDescription)
+                    return false
+                }
             }
+            if let store { return store.saveMarkdown(markdown) }
+            return false   // nowhere to write (guarded against upstream)
         }
-        if let store { return store.saveMarkdown(markdown) }
-        return false   // nowhere to write (guarded against upstream)
     }
 
     // MARK: Helpers

@@ -147,6 +147,9 @@ struct SegmentTextView: NSViewRepresentable {
         private var typedSlash = false
         /// True while a paste inserts text (suppresses the slash heuristic).
         var isPasting = false
+        /// Last caret location used to invalidate marker metadata whose kind is
+        /// represented only by typing attributes on an empty paragraph.
+        private var markerCaretLocation: Int?
         init(_ parent: SegmentTextView) { self.parent = parent }
 
         func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
@@ -165,8 +168,10 @@ struct SegmentTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? SegmentNSTextView else { return }
             guard !applyingRule else { return }
+            let editedLocation = tv.textStorage?.editedRange.location ?? 0
             if !applyLinePrefixRule(tv) { applyInlineRule(tv) }
             tv.fixEditedParagraphs()
+            tv.invalidateMarkerCache(from: editedLocation == NSNotFound ? 0 : editedLocation)
             tv.invalidateIntrinsicContentSize()
             tv.needsDisplay = true   // redraw list markers / checkboxes
             parent.onEdited()
@@ -253,6 +258,9 @@ struct SegmentTextView: NSViewRepresentable {
             guard let tv = notification.object as? SegmentNSTextView else { return }
             updateFormatBar(tv)
             syncTypingAttributes(tv)
+            let caret = tv.selectedRange().location
+            tv.invalidateMarkerCacheForCaretMove(from: markerCaretLocation, to: caret)
+            markerCaretLocation = caret
             tv.needsDisplay = true   // an empty list/todo marker follows the caret
         }
 
@@ -491,13 +499,38 @@ final class SegmentNSTextView: AutoSizingTextView {
     weak var segmentCoordinator: SegmentTextView.Coordinator?
     weak var formatBarRef: FormatBarController?
 
-    /// Hit rects for todo checkboxes, rebuilt on each draw (marker frame → the
-    /// paragraph's start location), used to toggle on click.
-    private var checkboxHits: [(rect: NSRect, location: Int)] = []
+    /// Hit rects for todo checkboxes keyed by paragraph start. Entries survive a
+    /// small dirty-rect redraw (such as a caret blink); content edits clear them.
+    private var checkboxHits: [Int: NSRect] = [:]
+
+    private struct MarkerEntry {
+        let range: NSRange
+        let contentLength: Int
+        let kind: ParagraphKind
+        let ordinal: Int?
+    }
+
+    /// Paragraph metadata is built once, then only the suffix from an edited
+    /// paragraph is rebuilt. Drawing can binary-search this index and visit only
+    /// paragraphs intersecting the dirty/visible range.
+    private var markerEntries: [MarkerEntry] = []
+    private var markerCacheTextLength = -1
+    private var markerCacheDirtyLocation: Int? = 0
 
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if ok { segmentCoordinator?.parent.onFocused() }
+        if ok {
+            invalidateMarkerCacheForCaretMove(from: nil, to: selectedRange().location)
+            segmentCoordinator?.parent.onFocused()
+        }
+        needsDisplay = true
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let caret = selectedRange().location
+        let ok = super.resignFirstResponder()
+        if ok { invalidateMarkerCacheForCaretMove(from: caret, to: caret) }
         needsDisplay = true
         return ok
     }
@@ -749,10 +782,10 @@ final class SegmentNSTextView: AutoSizingTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if let hit = checkboxHits.first(where: { $0.rect.contains(point) }), let storage = textStorage {
-            var pk = SegmentStyle.paragraphKind(in: storage, at: hit.location)
+        if let hit = checkboxHits.first(where: { $0.value.contains(point) }), let storage = textStorage {
+            var pk = SegmentStyle.paragraphKind(in: storage, at: hit.key)
             pk.checked.toggle()
-            setParagraphKind(pk, atParagraph: hit.location, restyleFonts: false)
+            setParagraphKind(pk, atParagraph: hit.key, restyleFonts: false)
             segmentCoordinator?.parent.onEdited()
             return
         }
@@ -860,26 +893,97 @@ final class SegmentNSTextView: AutoSizingTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        drawMarkers()
+        drawMarkers(in: dirtyRect)
     }
 
-    private func computeNumbering(_ storage: NSTextStorage) -> [Int: Int] {
-        var result: [Int: Int] = [:]
+    func invalidateMarkerCache(from location: Int = 0) {
+        let clamped = max(0, min(location, ns.length))
+        markerCacheDirtyLocation = min(markerCacheDirtyLocation ?? clamped, clamped)
+        checkboxHits.removeAll()
+    }
+
+    /// Empty paragraphs have no character on which to store their kind. Their
+    /// marker therefore follows the caret's typing attributes and must be
+    /// refreshed when focus or selection enters or leaves one. Non-empty caret
+    /// movement leaves the paragraph cache untouched.
+    func invalidateMarkerCacheForCaretMove(from oldLocation: Int?, to newLocation: Int) {
+        var earliestEmptyParagraph: Int?
+        for location in [oldLocation, Optional(newLocation)].compactMap({ $0 }) {
+            let range = paragraphRange(at: location)
+            guard contentLength(of: range) == 0 else { continue }
+            earliestEmptyParagraph = min(earliestEmptyParagraph ?? range.location, range.location)
+        }
+        if let earliestEmptyParagraph { invalidateMarkerCache(from: earliestEmptyParagraph) }
+    }
+
+    private func rebuildMarkerCacheIfNeeded(_ storage: NSTextStorage) {
+        if markerCacheTextLength != ns.length, markerCacheDirtyLocation == nil {
+            markerCacheDirtyLocation = 0
+        }
+        guard let dirty = markerCacheDirtyLocation else { return }
+
+        let start = paragraphRange(at: dirty).location
+        let prefix = markerEntries.prefix { $0.range.location < start }
+        var rebuilt = Array(prefix)
         var counters: [Int: Int] = [:]
-        ns.enumerateSubstrings(in: NSRange(location: 0, length: ns.length),
-                               options: .byParagraphs) { _, _, enclosing, _ in
-            let pk = SegmentStyle.paragraphKind(in: storage, at: enclosing.location)
+
+        for entry in rebuilt {
+            let pk = entry.kind
             let d = pk.depth
             counters = counters.filter { $0.key <= d }
             if pk.kind == .numbered {
-                let n = (counters[d] ?? 0) + 1
-                counters[d] = n
-                result[enclosing.location] = n
+                counters[d] = (counters[d] ?? 0) + 1
             } else {
                 counters[d] = nil
             }
         }
-        return result
+
+        var loc = start
+        repeat {
+            let range = loc < ns.length
+                ? ns.paragraphRange(for: NSRange(location: loc, length: 0))
+                : NSRange(location: ns.length, length: 0)
+            let contentLen = contentLength(of: range)
+            let pk = paragraphKind(forParagraphAt: range.location,
+                                   contentLen: contentLen, storage: storage)
+            let d = pk.depth
+            counters = counters.filter { $0.key <= d }
+            let ordinal: Int?
+            if pk.kind == .numbered {
+                let n = (counters[d] ?? 0) + 1
+                counters[d] = n
+                ordinal = n
+            } else {
+                counters[d] = nil
+                ordinal = nil
+            }
+            rebuilt.append(MarkerEntry(range: range, contentLength: contentLen,
+                                       kind: pk, ordinal: ordinal))
+            let next = range.location + range.length
+            if next <= loc || next >= ns.length {
+                if next == ns.length, ns.length > 0, ns.character(at: ns.length - 1) == 10 {
+                    loc = ns.length
+                    if range.location != ns.length { continue }
+                }
+                break
+            }
+            loc = next
+        } while loc <= ns.length
+
+        markerEntries = rebuilt
+        markerCacheTextLength = ns.length
+        markerCacheDirtyLocation = nil
+    }
+
+    /// First cached paragraph whose end is not before `location`.
+    private func firstMarkerIndex(intersecting location: Int) -> Int {
+        var low = 0, high = markerEntries.count
+        while low < high {
+            let mid = (low + high) / 2
+            let end = markerEntries[mid].range.location + markerEntries[mid].range.length
+            if end < location { low = mid + 1 } else { high = mid }
+        }
+        return low
     }
 
     /// The kind that applies to the paragraph starting at `pStart`. For a
@@ -914,35 +1018,33 @@ final class SegmentNSTextView: AutoSizingTextView {
         return r
     }
 
-    private func drawMarkers() {
+    private func drawMarkers(in dirtyRect: NSRect) {
         guard let lm = layoutManager, let tc = textContainer, let storage = textStorage else { return }
-        checkboxHits.removeAll()
-        let numbering = computeNumbering(storage)
+        let trace = PerformanceTrace.begin("MarkerPreparation")
+        defer { PerformanceTrace.end("MarkerPreparation", trace) }
+        rebuildMarkerCacheIfNeeded(storage)
         let origin = textContainerOrigin
-        let len = ns.length
+        var containerRect = dirtyRect
+        containerRect.origin.x -= origin.x
+        containerRect.origin.y -= origin.y
+        let glyphs = lm.glyphRange(forBoundingRect: containerRect, in: tc)
+        let chars = lm.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let visibleStart = chars.location
+        let visibleEnd = chars.location + chars.length
+        var index = firstMarkerIndex(intersecting: visibleStart)
 
-        // Iterate every paragraph, including a trailing/only empty one.
-        var starts: [Int] = []
-        if len == 0 {
-            starts = [0]
-        } else {
-            var loc = 0
-            while loc < len {
-                let pr = ns.paragraphRange(for: NSRange(location: loc, length: 0))
-                starts.append(pr.location)
-                loc = pr.location + pr.length
-            }
-            if ns.character(at: len - 1) == 10 { starts.append(len) }   // trailing empty line
-        }
-
-        for pStart in starts {
-            let pr = (pStart < len) ? ns.paragraphRange(for: NSRange(location: pStart, length: 0))
-                                    : NSRange(location: len, length: 0)
-            let cLen = contentLength(of: pr)
-            let pk = paragraphKind(forParagraphAt: pStart, contentLen: cLen, storage: storage)
+        while index < markerEntries.count {
+            let entry = markerEntries[index]
+            let pStart = entry.range.location
+            if pStart > visibleEnd { break }
+            let cLen = entry.contentLength
+            let pk = entry.kind
             switch pk.kind {
-            case .bulleted, .numbered, .todo, .quote: break
-            default: continue
+            case .bulleted, .numbered, .todo, .quote:
+                break
+            default:
+                index += 1
+                continue
             }
             let lineRect = firstLineUsedRect(forParagraphAt: pStart, lm: lm)
             // Under `CenteringLayoutManager` the used rect is the full fixed-height
@@ -971,7 +1073,7 @@ final class SegmentNSTextView: AutoSizingTextView {
                 let g = glyphs[min(pk.depth, glyphs.count - 1)]
                 drawMarkerText(g, at: NSPoint(x: indentX + 2, y: lineRect.minY + shift), font: font)
             case .numbered:
-                let n = numbering[pStart] ?? 1
+                let n = entry.ordinal ?? 1
                 drawMarkerText("\(n).", at: NSPoint(x: indentX + 2, y: lineRect.minY + shift), font: font)
             case .todo:
                 let symbol = pk.checked ? "checkmark.square.fill" : "square"
@@ -981,7 +1083,7 @@ final class SegmentNSTextView: AutoSizingTextView {
                     img.withSymbolConfiguration(.init(pointSize: 13, weight: .regular))?
                         .tinted(tint)?.draw(in: box)
                 }
-                checkboxHits.append((box.insetBy(dx: -3, dy: -3), pStart))
+                checkboxHits[pStart] = box.insetBy(dx: -3, dy: -3)
                 if pk.checked, cLen > 0 {
                     // Strikethrough over the text of each line (never stored, so the
                     // codec never emits ~~ for it).
@@ -1001,7 +1103,21 @@ final class SegmentNSTextView: AutoSizingTextView {
                 }
             default: break
             }
+            index += 1
         }
+    }
+
+    // Test seam for numbering-cache invalidation without relying on pixel output.
+    func markerOrdinalForTesting(at location: Int) -> Int? {
+        guard let storage = textStorage else { return nil }
+        rebuildMarkerCacheIfNeeded(storage)
+        return markerEntries.first { $0.range.location == location }?.ordinal
+    }
+
+    func markerKindForTesting(at location: Int) -> BlockKind? {
+        guard let storage = textStorage else { return nil }
+        rebuildMarkerCacheIfNeeded(storage)
+        return markerEntries.first { $0.range.location == location }?.kind.kind
     }
 
     private func drawMarkerText(_ s: String, at point: NSPoint, font: NSFont) {

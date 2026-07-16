@@ -420,7 +420,7 @@ private struct TextSegmentContainer: View {
         case .code:
             widget = Segment(payload: .code(
                 language: .swift,
-                text: NSAttributedString(string: "", attributes: BlockTextView.typingAttributes(for: .code))))
+                text: NSTextStorage(string: "", attributes: BlockTextView.typingAttributes(for: .code))))
         case .image:
             let panel = NSOpenPanel()
             panel.allowedContentTypes = [.image]

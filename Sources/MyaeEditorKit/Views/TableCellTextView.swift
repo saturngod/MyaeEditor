@@ -233,7 +233,9 @@ struct TableCellTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let tv = notification.object as? TableCellNSTextView,
                   let storage = tv.textStorage else { return }
-            let md = MarkdownCodec.inlineMarkdown(from: storage, baseFont: parent.baseFont)
+            let md = PerformanceTrace.measure("MarkdownEncode") {
+                MarkdownCodec.inlineMarkdown(from: storage, baseFont: parent.baseFont)
+            }
             // `lastMarkdown` tracks what the view currently displays, so a later
             // `updateNSView` only rebuilds (and moves the caret) on a *genuine*
             // external change — not on the model value we're pushing right now.

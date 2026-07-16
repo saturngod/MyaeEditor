@@ -51,11 +51,15 @@ private struct FileCommands: Commands {
             .keyboardShortcut("o", modifiers: [.command])
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Save") { editor?.save() }
+            Button("Save") {
+                if let editor { Task { await editor.saveAsync() } }
+            }
                 .keyboardShortcut("s", modifiers: [.command])
                 .disabled(editor == nil)
 
-            Button("Save As Markdown…") { editor?.saveAsWithPanel() }
+            Button("Save As Markdown…") {
+                if let editor { Task { await editor.saveAsWithPanelAsync() } }
+            }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(editor == nil)
         }

@@ -108,14 +108,16 @@ private struct BindingSyncModifier: ViewModifier {
     func body(content: Content) -> some View {
         guard markdown != nil || onChange != nil else { return AnyView(content) }
         return AnyView(content.onAppear {
-            controller.onChange = { c in
-                let encoded = c.markdown
+            controller.onSettledMarkdown = { encoded in
                 onChange?(encoded)
                 if let markdown, markdown.wrappedValue != encoded {
                     lastPushed = encoded
                     markdown.wrappedValue = encoded
                 }
             }
+        }
+        .onDisappear {
+            controller.onSettledMarkdown = nil
         }
         .onChange(of: markdown?.wrappedValue ?? "") { _, newValue in
             // Only reload when the change originated outside the editor.

@@ -67,7 +67,14 @@ struct SegmentImageView: View {
             }
         }
         .padding(.vertical, 6)
-        .task(id: path) { image = loadImage() }
+        .task(id: path) {
+            image = nil
+            guard let path else { return }
+            let url = document.imageURL(for: path)
+            let loaded = await ImageLoader.shared.image(for: url, maxPixelSize: 1_040)
+            guard !Task.isCancelled else { return }
+            image = loaded
+        }
     }
 
     private var placeholder: some View {
@@ -104,10 +111,6 @@ struct SegmentImageView: View {
         document.removeWidget(segment.id)
     }
 
-    private func loadImage() -> NSImage? {
-        guard let path else { return nil }
-        return NSImage(contentsOf: document.imageURL(for: path))
-    }
 }
 
 // MARK: - Equation
@@ -189,7 +192,7 @@ struct SegmentCodeView: View {
     @State private var showingZoom = false
 
     private var language: CodeLanguage { segment.codeLanguage ?? .plain }
-    private var text: NSAttributedString { segment.codeText ?? NSAttributedString(string: "") }
+    private var text: NSTextStorage { segment.codeText ?? NSTextStorage(string: "") }
 
     /// Copy the block's source to the pasteboard, with brief ✓ feedback.
     private func copyCode() {
@@ -303,7 +306,7 @@ struct SegmentCodeView: View {
     }
 
     private func setLanguage(_ lang: CodeLanguage) {
-        segment.payload = .code(language: lang, text: segment.codeText ?? NSAttributedString(string: ""))
+        segment.payload = .code(language: lang, text: segment.codeText ?? NSTextStorage(string: ""))
         document.markEdited()
     }
 }
@@ -348,8 +351,8 @@ struct CodeSegmentEditor: NSViewRepresentable {
         tv.textContainer?.replaceLayoutManager(codeLM)
         tv.font = BlockKind.code.baseFont
         tv.typingAttributes = BlockTextView.typingAttributes(for: .code)
-        if let code = segment.codeText { tv.textStorage?.setAttributedString(code) }
-        if let storage = tv.textStorage {
+        if let storage = segment.codeText {
+            tv.layoutManager?.replaceTextStorage(storage)
             SyntaxHighlighter.highlight(storage, language: language, font: BlockKind.code.baseFont)
         }
         context.coordinator.lastLanguage = language
@@ -396,8 +399,6 @@ struct CodeSegmentEditor: NSViewRepresentable {
             guard let tv = notification.object as? CodeNSTextView, let storage = tv.textStorage else { return }
             SyntaxHighlighter.highlight(storage, language: parent.language,
                                         font: BlockKind.code.baseFont, editedRange: storage.editedRange)
-            parent.segment.payload = .code(language: parent.language,
-                                           text: NSAttributedString(attributedString: storage))
             tv.invalidateIntrinsicContentSize()
             parent.document.markEdited()
         }

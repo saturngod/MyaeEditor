@@ -13,31 +13,37 @@ import AppKit
 enum SegmentCodec {
 
     private static let indentUnit = "    "   // 4 spaces per nesting level
+    /// Test-only observation seam for detecting redundant whole-document work.
+    /// Production leaves this nil.
+    static var encodeObserver: (([Segment]) -> Void)?
 
     // MARK: Encode
 
     static func encode(_ segments: [Segment]) -> String {
-        var lines: [String] = []
-        for seg in segments {
-            switch seg.payload {
-            case .text(let storage):
-                lines.append(contentsOf: encodeTextSegment(storage))
-            case .code(let language, let text):
-                let lang = language == .plain ? "" : language.rawValue
-                lines.append("```\(lang)")
-                lines.append(contentsOf: text.string.components(separatedBy: "\n"))
-                lines.append("```")
-            case .table(let t):
-                lines.append(contentsOf: encodeTable(t))
-            case .image(let path):
-                if let path { lines.append("![](\(path))") }
-            case .equation(let latex):
-                lines.append("$$" + latex + "$$")
-            case .divider:
-                lines.append("---")
+        encodeObserver?(segments)
+        return PerformanceTrace.measure("MarkdownEncode") {
+            var lines: [String] = []
+            for seg in segments {
+                switch seg.payload {
+                case .text(let storage):
+                    lines.append(contentsOf: encodeTextSegment(storage))
+                case .code(let language, let text):
+                    let lang = language == .plain ? "" : language.rawValue
+                    lines.append("```\(lang)")
+                    lines.append(contentsOf: text.string.components(separatedBy: "\n"))
+                    lines.append("```")
+                case .table(let t):
+                    lines.append(contentsOf: encodeTable(t))
+                case .image(let path):
+                    if let path { lines.append("![](\(path))") }
+                case .equation(let latex):
+                    lines.append("$$" + latex + "$$")
+                case .divider:
+                    lines.append("---")
+                }
             }
+            return lines.joined(separator: "\n")
         }
-        return lines.joined(separator: "\n")
     }
 
     /// Encode one text segment's storage to Markdown lines (one per paragraph).
@@ -138,8 +144,8 @@ enum SegmentCodec {
                     code.append(lines[i]); i += 1
                 }
                 i += 1   // skip closing fence
-                let text = NSAttributedString(string: code.joined(separator: "\n"),
-                                              attributes: BlockTextView.typingAttributes(for: .code))
+                let text = NSTextStorage(string: code.joined(separator: "\n"),
+                                         attributes: BlockTextView.typingAttributes(for: .code))
                 segments.append(Segment(payload: .code(language: language, text: text)))
                 continue
             }

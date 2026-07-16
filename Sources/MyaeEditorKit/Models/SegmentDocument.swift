@@ -108,7 +108,7 @@ final class SegmentDocument {
 
         let codeSeg = Segment(payload: .code(
             language: language,
-            text: NSAttributedString(string: "", attributes: BlockTextView.typingAttributes(for: .code))))
+            text: NSTextStorage(string: "", attributes: BlockTextView.typingAttributes(for: .code))))
         newSegs.append(codeSeg)
 
         // Text after the fence line.

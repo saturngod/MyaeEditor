@@ -56,7 +56,10 @@ final class Segment: Identifiable {
         /// attaches to it directly.
         case text(NSTextStorage)
         /// A fenced code block (including mermaid, whose language is `.mermaid`).
-        case code(language: CodeLanguage, text: NSAttributedString)
+        /// Like text segments, code owns a shared storage object so the live text
+        /// view edits the model in place instead of copying the entire attributed
+        /// string after every keystroke.
+        case code(language: CodeLanguage, text: NSTextStorage)
         case table(TableData)
         case image(path: String?)
         /// A centered display equation; the value is its LaTeX source.
@@ -82,7 +85,7 @@ final class Segment: Identifiable {
     }
 
     /// The source text of a code segment, or `nil` otherwise.
-    var codeText: NSAttributedString? {
+    var codeText: NSTextStorage? {
         if case .code(_, let t) = payload { return t }
         return nil
     }

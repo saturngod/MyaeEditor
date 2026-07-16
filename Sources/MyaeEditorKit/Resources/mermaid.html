@@ -15,8 +15,24 @@
 <script>
 let seq = 0;
 
-// Render `code` into #container at the current page width and return the rendered
-// height in CSS px. Throws (rejects) on a mermaid syntax error — the message
+// Install an SVG into #container at the current page width and return its height.
+// Cached SVG can use this path without re-running Mermaid's parser and renderer.
+async function installMermaid(svg, bg) {
+  document.documentElement.style.background = bg;
+  document.body.style.background = bg;
+  const c = document.getElementById('container');
+  c.innerHTML = svg;
+  const el = c.querySelector('svg');
+  if (!el) throw new Error('mermaid produced no SVG');
+  el.removeAttribute('height');
+  el.style.maxWidth = '100%';
+  el.style.height = 'auto';
+  await new Promise(function (r) { setTimeout(r, 0); });
+  return Math.ceil(el.getBoundingClientRect().height);
+}
+
+// Render `code` into #container at the current page width and return both SVG
+// and height. Throws (rejects) on a mermaid syntax error — the message
 // surfaces to Swift, which sizes the web view to the returned height.
 //   theme: 'default' | 'dark'
 //   bg:    opaque page background hex, so it blends with the block card
@@ -37,22 +53,8 @@ async function renderMermaid(code, theme, bg) {
   const id = 'm' + (++seq);
   const { svg } = await mermaid.render(id, code);
 
-  const c = document.getElementById('container');
-  c.innerHTML = svg;
-  const el = c.querySelector('svg');
-  if (!el) throw new Error('mermaid produced no SVG');
-
-  // Responsive: fit the page width, keep aspect ratio. mermaid already sets
-  // max-width; the stylesheet enforces height:auto so it scales as one piece.
-  el.removeAttribute('height');
-  el.style.maxWidth = '100%';
-  el.style.height = 'auto';
-
-  // Let styles settle, then measure. setTimeout (unlike requestAnimationFrame) still
-  // fires when the web view isn't on screen, so an off-screen block never hangs here.
-  // getBoundingClientRect forces a synchronous layout, so the height is accurate.
-  await new Promise(function (r) { setTimeout(r, 0); });
-  return Math.ceil(el.getBoundingClientRect().height);
+  const height = await installMermaid(svg, bg);
+  return { svg: svg, height: height };
 }
 </script>
 </body>
